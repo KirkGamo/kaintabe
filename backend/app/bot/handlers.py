@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 # Onboarding states
 ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE = range(5)
 # Posting states
-FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW = range(10, 16)
+FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY = range(10, 17)
 
 END = ConversationHandler.END
 
@@ -50,6 +50,25 @@ PLEDGE_TEXT = (
     "• I will keep it stored properly until pickup.\n\n"
     "Recipients rely on this. Do you agree?"
 )
+
+# Asked before every listing goes live. Any "No" blocks the post with the matching reason.
+SAFETY_CHECKLIST = [
+    (
+        "hygienic",
+        "🧼 Was it prepared and handled hygienically (clean hands and utensils, kept covered)?",
+        "food that may not have been handled hygienically",
+    ),
+    (
+        "safe_temperature",
+        "🌡️ Has it been kept at a safe temperature (refrigerated, or kept hot / freshly cooked)?",
+        "food that hasn't been kept at a safe temperature",
+    ),
+    (
+        "contents_known",
+        "🥜 Do you know what's in it, including common allergens (nuts, shellfish, eggs, milk)?",
+        "food with unknown contents, because recipients may have allergies",
+    ),
+]
 
 
 def md(text: str) -> str:
@@ -257,13 +276,53 @@ async def chose_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     donor = context.user_data["donor"]
     context.user_data["draft"].update(lat=donor["lat"], lng=donor["lng"])
     await answer_choice(update, "My saved location")
-    return await publish(update, context)
+    return await ask_safety(update, context, 0)
 
 
 async def got_pickup_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     loc = update.effective_message.location
     context.user_data["draft"].update(lat=loc.latitude, lng=loc.longitude)
     await update.effective_message.reply_text("📍 Got it.", reply_markup=ReplyKeyboardRemove())
+    return await ask_safety(update, context, 0)
+
+
+async def ask_safety(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int) -> int:
+    if index == 0:
+        context.user_data["draft"]["safety_checklist"] = {}
+        await update.effective_message.reply_text("Last step: a quick safety check (3 taps) ✅")
+    _, question, _ = SAFETY_CHECKLIST[index]
+    await update.effective_message.reply_text(
+        f"{index + 1}/{len(SAFETY_CHECKLIST)} {question}",
+        reply_markup=buttons([[("Yes", f"safe:{index}:yes"), ("No", f"safe:{index}:no")]]),
+    )
+    return SAFETY
+
+
+async def answered_safety(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    _, index, answer = update.callback_query.data.split(":")
+    index = int(index)
+    checklist = context.user_data["draft"]["safety_checklist"]
+    if index != len(checklist):  # an old button tapped out of order
+        await update.callback_query.answer("Please answer the latest question.")
+        return None
+
+    key, _, block_reason = SAFETY_CHECKLIST[index]
+    await answer_choice(update, answer.capitalize())
+
+    if answer == "no":
+        context.user_data.pop("draft", None)
+        context.user_data.pop("donor", None)
+        await update.effective_message.reply_text(
+            "Thank you for being honest 💚\n\n"
+            f"To keep recipients safe, we can't list {block_reason}. "
+            "This listing was not posted.\n\n"
+            "Send a new photo anytime you have food that passes the check."
+        )
+        return END
+
+    checklist[key] = True
+    if index + 1 < len(SAFETY_CHECKLIST):
+        return await ask_safety(update, context, index + 1)
     return await publish(update, context)
 
 
@@ -344,6 +403,7 @@ def build_application(token: str) -> Application:
             HOURS: [CallbackQueryHandler(chose_hours, pattern=r"^hrs:")],
             PICKUP: [CallbackQueryHandler(chose_pickup, pattern=r"^loc:")],
             PICKUP_NEW: [MessageHandler(filters.LOCATION, got_pickup_location), MessageHandler(text, location_expected)],
+            SAFETY: [CallbackQueryHandler(answered_safety, pattern=r"^safe:")],
         },
         fallbacks=fallbacks,
         allow_reentry=True,  # a new photo restarts the draft
