@@ -28,3 +28,5 @@ class Settings(BaseSettings):
 settings = Settings()
 settings.supabase_url = settings.supabase_url.rstrip("/")
 settings.public_url = settings.public_url.rstrip("/")
+if settings.public_url and "://" not in settings.public_url:
+    settings.public_url = f"https://{settings.public_url}"  # Telegram webhooks must be HTTPS

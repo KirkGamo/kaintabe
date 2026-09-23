@@ -88,3 +88,18 @@ def test_webhook_rejected_when_no_secret_configured():
 def test_cors_origins_parsing():
     with patch.object(main.settings, "frontend_origin", "http://localhost:5173, https://kaintabe.vercel.app/"):
         assert main.settings.cors_origins == ["http://localhost:5173", "https://kaintabe.vercel.app"]
+
+
+def test_public_url_gets_https_scheme(monkeypatch):
+    import importlib
+
+    from app import config
+
+    monkeypatch.setenv("PUBLIC_URL", "my-app.up.railway.app/")
+    try:
+        assert importlib.reload(config).settings.public_url == "https://my-app.up.railway.app"
+        monkeypatch.setenv("PUBLIC_URL", "https://already.example.com")
+        assert importlib.reload(config).settings.public_url == "https://already.example.com"
+    finally:
+        monkeypatch.delenv("PUBLIC_URL")
+        importlib.reload(config)
