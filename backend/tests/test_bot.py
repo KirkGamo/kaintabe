@@ -239,7 +239,9 @@ def test_markdown_escaping():
 
 def test_application_builds():
     app = h.build_application("123456:TEST")
-    assert [c.name for c in app.handlers[0]] == ["onboarding", "posting"]
+    kinds = [getattr(c, "name", None) or type(c).__name__ for c in app.handlers[0]]
+    # conversations first; catch-alls last so they only see what no conversation handled
+    assert kinds == ["onboarding", "posting", "CommandHandler", "CallbackQueryHandler", "MessageHandler"]
 
 
 def test_storage_upload_roundtrip():

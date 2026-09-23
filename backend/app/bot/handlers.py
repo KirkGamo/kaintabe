@@ -541,6 +541,30 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return END
 
 
+# ---------------------------------------------------------------------------
+# Catch-alls: conversation state lives in memory, so after a restart (every deploy) a donor's
+# half-finished post is forgotten. Whatever they tap or type next must still get an answer.
+# ---------------------------------------------------------------------------
+
+async def stale_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)  # remove the dead buttons
+    except Exception:  # noqa: BLE001 - message too old to edit, etc.
+        pass
+    await update.effective_message.reply_text(
+        "⏱ That step expired (the bot was restarted or it's been a while).\n\n"
+        "Please send the photo again to start over, or /start."
+    )
+
+
+async def unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        "To share food, just send a photo of it 📸\n/profile to update your details · /cancel to stop a post"
+    )
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("bot handler failed", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
@@ -601,5 +625,9 @@ def build_application(token: str, request=None) -> Application:
 
     app.add_handler(onboarding)
     app.add_handler(posting)
+    # Same group, registered last: only reached when no conversation handled the update
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CallbackQueryHandler(stale_button))
+    app.add_handler(MessageHandler(text, unexpected_text))
     app.add_error_handler(on_error)
     return app

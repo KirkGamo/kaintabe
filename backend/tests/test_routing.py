@@ -133,3 +133,35 @@ def test_profile_before_onboarding_starts_welcome():
     fake = run_updates([message("/profile")])
     assert any("What brings you here" in t for t in fake.texts())
     assert donor() is None
+
+
+# --- after a restart the in-memory conversation is gone; the bot must still answer ---
+
+def test_button_from_before_restart_gets_expired_notice():
+    run_updates(ONBOARD)
+    fake = run_updates([tap("hrs:2")])  # fresh Application = restarted bot
+    assert any("expired" in t for t in fake.texts())
+    assert any(e == "editMessageReplyMarkup" for e, _ in fake.sent)  # old buttons removed
+
+
+def test_cancel_works_outside_a_conversation():
+    fake = run_updates([message("/cancel")])
+    assert any("Cancelled" in t for t in fake.texts())
+
+
+def test_cancel_mid_post_answers_once():
+    run_updates(ONBOARD)
+    fake = run_updates([message("/start"), message("/cancel")])
+    assert sum("Cancelled" in t for t in fake.texts()) == 1
+
+
+def test_stray_text_gets_a_hint():
+    run_updates(ONBOARD)
+    fake = run_updates([message("hello?")])
+    assert any("send a photo" in t for t in fake.texts())
+
+
+def test_onboarding_text_is_not_swallowed_by_catch_all():
+    fake = run_updates(ONBOARD)
+    assert not any("To share food, just send a photo" in t for t in fake.texts())
+    assert donor() is not None
