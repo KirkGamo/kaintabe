@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     public_url: str = ""  # e.g. https://kaintabe-api.up.railway.app
     webhook_secret: str = ""  # checked against Telegram's X-Telegram-Bot-Api-Secret-Token header
     anthropic_api_key: str = ""
+    ai_model: str = "claude-sonnet-5"
     # comma-separated, e.g. "http://localhost:5173,https://kaintabe.vercel.app"
     frontend_origin: str = "http://localhost:5173"
 
