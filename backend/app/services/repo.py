@@ -1,0 +1,60 @@
+"""Database access for the bot and API. Sync psycopg; call from async code via asyncio.to_thread."""
+from app import db
+
+
+def get_donor_by_chat(chat_id: int) -> dict | None:
+    with db.connect() as conn:
+        return conn.execute("select * from donors where telegram_chat_id = %s", (chat_id,)).fetchone()
+
+
+def create_donor(chat_id: int, name: str, type_: str, lat: float, lng: float) -> dict:
+    """Register (or re-register) a donor; re-running onboarding updates the profile."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            insert into donors (telegram_chat_id, name, type, lat, lng, pledged_at)
+            values (%s, %s, %s, %s, %s, now())
+            on conflict (telegram_chat_id) do update
+              set name = excluded.name, type = excluded.type,
+                  lat = excluded.lat, lng = excluded.lng, pledged_at = now()
+            returning *
+            """,
+            (chat_id, name, type_, lat, lng),
+        ).fetchone()
+
+
+def create_donation(
+    *,
+    donor: dict,
+    photo_url: str | None,
+    food_type: str,
+    quantity: str,
+    est_kg: float | None,
+    lat: float,
+    lng: float,
+    good_for_hours: float,
+    safety_checklist: dict | None = None,
+) -> dict:
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            insert into donations (donor_id, donor_name, photo_url, food_type, quantity, est_kg,
+                                   lat, lng, safety_checklist, expires_at, search_radius_m)
+            values (%(donor_id)s, %(donor_name)s, %(photo_url)s, %(food_type)s, %(quantity)s, %(est_kg)s,
+                    %(lat)s, %(lng)s, %(safety)s, now() + make_interval(mins => %(minutes)s),
+                    (select value::int from app_config where key = 'radius_start_m'))
+            returning *
+            """,
+            {
+                "donor_id": donor["id"],
+                "donor_name": donor["name"],
+                "photo_url": photo_url,
+                "food_type": food_type,
+                "quantity": quantity,
+                "est_kg": est_kg,
+                "lat": lat,
+                "lng": lng,
+                "safety": db.Json(safety_checklist) if safety_checklist is not None else None,
+                "minutes": int(good_for_hours * 60),
+            },
+        ).fetchone()
