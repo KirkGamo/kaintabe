@@ -54,11 +54,12 @@ def test_sale_listings_do_not_widen_or_escalate(conn):
     assert r["search_radius_m"] == 2000 and r["status"] == "posted"
 
 
-def test_reserve_locks_current_price(conn):
+def test_reserve_locks_live_price(conn):
+    interval(conn, 10)
     d = sale(conn, 80)
-    conn.execute("update donations set current_price = 48 where id = %s", (d,))
+    conn.execute("update donations set radius_widened_at = now() - interval '5 minutes' where id = %s", (d,))
     claim = conn.execute("select * from claim_donation(%s, %s)", (d, JARO)).fetchone()
-    assert float(claim["reserved_price"]) == 48
+    assert float(claim["reserved_price"]) == 40  # 80 * (1 - 5/10)
 
 
 def test_donation_claim_has_no_price(conn):
@@ -72,3 +73,12 @@ def test_sold_after_confirm(conn):
     claim = conn.execute("select * from claim_donation(%s, %s)", (d, JARO)).fetchone()
     conn.execute("select * from confirm_pickup(%s, %s)", (claim["id"], "https://example.com/p.jpg"))
     assert row(conn, d)["status"] == "sold"
+
+
+def test_reserve_uses_live_price_not_stale_stored_one(conn):
+    """Regression: stored current_price lags up to one cron tick; reserving must use the price right now."""
+    interval(conn, 1)
+    d = sale(conn, 100, minutes_ago=0.25)  # 15 s into a 60 s window -> live price is 75
+    conn.execute("update donations set current_price = 97 where id = %s", (d,))  # stale value from an earlier tick
+    claim = conn.execute("select * from claim_donation(%s, %s)", (d, JARO)).fetchone()
+    assert float(claim["reserved_price"]) == 75

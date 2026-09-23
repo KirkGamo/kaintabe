@@ -97,7 +97,7 @@ def test_confirming_sale_marks_sold(upload, send):
         res = confirm(str(claim["id"]))
         assert res.status_code == 200 and res.json()["donation_status"] == "sold"
         caption = send.await_args.args[2]
-        assert "Sold" in caption and "₱45" in caption
+        assert "Sold" in caption and f"₱{float(claim['reserved_price']):g}" in caption
     finally:
         conn.execute("delete from claims where donation_id = %s", (donation_id,))
         conn.execute("delete from donations where id = %s", (donation_id,))
