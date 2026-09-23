@@ -81,9 +81,9 @@ def create_donation(
 
 
 def sale_window_minutes() -> float:
-    """Sale prices decay over the same window that triggers auto-widen."""
+    """How long a sale's price takes to fall before it becomes a free donation."""
     with db.connect() as conn:
-        return float(conn.execute("select value from app_config where key = 'widen_after_minutes'").fetchone()["value"])
+        return float(conn.execute("select value from app_config where key = 'sale_window_minutes'").fetchone()["value"])
 
 
 def claim_donation(donation_id: str, recipient_id: str) -> dict:

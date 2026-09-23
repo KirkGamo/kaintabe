@@ -78,7 +78,7 @@ def sale_listing():
                                   listing_type="sale", original_price=100, current_price=100)
     # halfway through its price window (whatever the configured window is) -> live price ~P50
     conn.execute("update donations set radius_widened_at = now() - make_interval(secs => "
-                 "(select value from app_config where key = 'widen_after_minutes') * 30) where id = %s",
+                 "(select value from app_config where key = 'sale_window_minutes') * 30) where id = %s",
                  (donation_id,))
     conn.commit()
     yield str(donation_id)

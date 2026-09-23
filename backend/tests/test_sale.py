@@ -15,7 +15,7 @@ def row(conn, d):
 
 
 def interval(conn, minutes):
-    conn.execute("update app_config set value = %s where key = 'widen_after_minutes'", (minutes,))
+    conn.execute("update app_config set value = %s where key in ('widen_after_minutes', 'sale_window_minutes')", (minutes,))
 
 
 def test_price_decays_linearly(conn):

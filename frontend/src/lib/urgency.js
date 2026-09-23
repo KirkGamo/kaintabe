@@ -37,7 +37,7 @@ export function reachState(d, config, now) {
  * Mirrors decay_sale_prices() in SQL; the server's price is what gets locked on reserve.
  */
 export function saleState(d, config, now) {
-  const windowMs = config.widen_after_minutes * 60000
+  const windowMs = config.sale_window_minutes * 60000
   const elapsed = now - new Date(d.radius_widened_at).getTime()
   const original = Number(d.original_price)
   const price = Math.max(1, Math.round(original * (1 - elapsed / windowMs)))
