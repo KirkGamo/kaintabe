@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import DonationCard from './components/DonationCard'
 import MapView from './components/MapView'
 import { useClaims } from './hooks/useClaims'
@@ -8,6 +8,9 @@ import { useNow } from './hooks/useNow'
 import { claimDonation, confirmPickup } from './lib/api'
 import { distanceM } from './lib/geo'
 import { timeLeft } from './lib/urgency'
+
+// Charts are heavy; load them only when the Impact tab is opened
+const ImpactDashboard = lazy(() => import('./components/ImpactDashboard'))
 
 const VIEWER_KEY = 'kaintabe.viewer'
 
@@ -45,7 +48,33 @@ function classify(donations, claimsByDonation, viewer, now) {
   return { open, out, mine }
 }
 
+// #impact opens the dashboard directly (handy as the demo's closing screen)
+function useHashView() {
+  const read = () => (window.location.hash === '#impact' ? 'impact' : 'map')
+  const [view, setView] = useState(read)
+  useEffect(() => {
+    const onHash = () => setView(read())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  return view
+}
+
+function Tab({ href, active, children }) {
+  return (
+    <a
+      href={href}
+      aria-current={active ? 'page' : undefined}
+      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition
+        ${active ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+    >
+      {children}
+    </a>
+  )
+}
+
 export default function App() {
+  const view = useHashView()
   const now = useNow()
   const { donations, live } = useDonations()
   const { claimsByDonation, addClaim } = useClaims()
@@ -141,8 +170,16 @@ export default function App() {
             <p className="text-xs text-slate-500 leading-tight">Surplus food, matched before it spoils</p>
           </div>
         </div>
+        <nav className="flex items-center gap-1 order-last sm:order-0 w-full sm:w-auto">
+          <Tab href="#map" active={view === 'map'}>
+            🗺️ Map
+          </Tab>
+          <Tab href="#impact" active={view === 'impact'}>
+            📊 Impact
+          </Tab>
+        </nav>
         <div className="flex items-center gap-3">
-          <label className="text-sm flex items-center gap-2">
+          <label className={`text-sm flex items-center gap-2 ${view === 'impact' ? 'invisible' : ''}`}>
             <span className="text-slate-500 hidden sm:inline">Viewing as</span>
             <select
               value={viewerId ?? ''}
@@ -166,46 +203,54 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col md:flex-row">
-        <section className="h-[45dvh] md:h-auto md:flex-1 relative">
-          <MapView
-            items={mapItems}
-            recipients={recipients}
-            viewer={viewer}
-            selected={selected}
-            onSelect={(d) => setSelectedId(d.id)}
-            now={now}
-          />
-        </section>
+      {view === 'impact' ? (
+        <main className="flex-1 min-h-0">
+          <Suspense fallback={<p className="p-6 text-center text-slate-500">Loading impact…</p>}>
+            <ImpactDashboard />
+          </Suspense>
+        </main>
+      ) : (
+        <main className="flex-1 min-h-0 flex flex-col md:flex-row">
+          <section className="h-[45dvh] md:h-auto md:flex-1 relative">
+            <MapView
+              items={mapItems}
+              recipients={recipients}
+              viewer={viewer}
+              selected={selected}
+              onSelect={(d) => setSelectedId(d.id)}
+              now={now}
+            />
+          </section>
 
-        <aside className="flex-1 md:flex-none md:w-100 min-h-0 overflow-y-auto p-3 space-y-2 border-t md:border-t-0 md:border-l border-slate-200">
-          {mine.length > 0 && (
-            <>
-              <h2 className="text-sm font-semibold text-indigo-700 px-1">Your pickups ({mine.length})</h2>
-              {mine.map(card)}
-            </>
-          )}
+          <aside className="flex-1 md:flex-none md:w-100 min-h-0 overflow-y-auto p-3 space-y-2 border-t md:border-t-0 md:border-l border-slate-200">
+            {mine.length > 0 && (
+              <>
+                <h2 className="text-sm font-semibold text-indigo-700 px-1">Your pickups ({mine.length})</h2>
+                {mine.map(card)}
+              </>
+            )}
 
-          <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
-            {open.length} listing{open.length === 1 ? '' : 's'} near you
-          </h2>
-          {open.length === 0 && (
-            <div className="text-center text-slate-500 text-sm py-8">
-              <div className="text-4xl mb-2">🌱</div>
-              Nothing within reach right now.
-              <br />
-              New listings appear here instantly.
-              {out.length > 0 && (
-                <p className="mt-2 text-xs">
-                  {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (faded
-                  pins).
-                </p>
-              )}
-            </div>
-          )}
-          {open.map(card)}
-        </aside>
-      </main>
+            <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
+              {open.length} listing{open.length === 1 ? '' : 's'} near you
+            </h2>
+            {open.length === 0 && (
+              <div className="text-center text-slate-500 text-sm py-8">
+                <div className="text-4xl mb-2">🌱</div>
+                Nothing within reach right now.
+                <br />
+                New listings appear here instantly.
+                {out.length > 0 && (
+                  <p className="mt-2 text-xs">
+                    {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (faded
+                    pins).
+                  </p>
+                )}
+              </div>
+            )}
+            {open.map(card)}
+          </aside>
+        </main>
+      )}
 
       {toast && (
         <div
