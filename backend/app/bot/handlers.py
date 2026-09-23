@@ -26,7 +26,7 @@ from telegram.ext import (
     filters,
 )
 
-from app.services import repo, storage
+from app.services import ai_intake, repo, storage
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 # Onboarding states
 ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE = range(5)
 # Posting states
-FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY = range(10, 17)
+FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM = range(10, 18)
 
 END = ConversationHandler.END
 
@@ -210,16 +210,69 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
         return END
 
-    context.user_data["draft"] = {"photo_file_id": msg.photo[-1].file_id}  # largest size
+    tg_file = await context.bot.get_file(msg.photo[-1].file_id)  # largest size
+    context.user_data["draft"] = {"photo": bytes(await tg_file.download_as_bytearray())}
     context.user_data["donor"] = donor
-
     caption = (msg.caption or "").strip()
+
+    listing = None
+    if ai_intake.enabled():
+        await msg.reply_text("🔍 Looking at your photo…")
+        listing = await ai_intake.parse_food_photo(context.user_data["draft"]["photo"], caption or None)
+    if listing and listing.is_food:
+        context.user_data["draft"]["ai"] = listing.model_dump()
+        await msg.reply_text(
+            ai_summary(listing),
+            parse_mode="Markdown",
+            reply_markup=buttons([[("✅ Looks right", "ai:ok"), ("✏️ Fix details", "ai:edit")]]),
+        )
+        return AI_CONFIRM
+    if listing and not listing.is_food:
+        await msg.reply_text("🤔 That doesn't look like food to me. If it is, let's add the details by hand.")
+    return await ask_manual(update, context, caption)
+
+
+def ai_summary(listing: "ai_intake.FoodListing") -> str:
+    lines = [
+        "🤖 *Here's what I see:*",
+        f"🍱 {md(listing.food_type)}",
+        f"📦 {md(listing.quantity)} (~{listing.est_kg:g} kg)",
+        f"⏱ Good for about {listing.good_for_hours} hrs",
+    ]
+    if listing.allergens:
+        lines.append(f"⚠️ May contain: {md(', '.join(listing.allergens))}")
+    lines.append("")
+    lines.append("Is this right?" if listing.confidence != "low" else "I'm not fully sure, so please check. Is this right?")
+    return "\n".join(lines)
+
+
+async def chose_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    draft = context.user_data["draft"]
+    ai = draft.pop("ai")
+    if update.callback_query.data == "ai:edit":
+        await answer_choice(update, "Fix details")
+        return await ask_manual(update, context, caption="")
+    await answer_choice(update, "Looks right")
+    draft.update(
+        food_type=ai["food_type"],
+        quantity=ai["quantity"],
+        est_kg=ai["est_kg"],
+        good_for_hours=ai["good_for_hours"],
+        allergens=ai["allergens"],
+        suggested_price=ai["suggested_price_php"],
+        ai_assisted=True,
+    )
+    return await ask_pickup(update, context)
+
+
+async def ask_manual(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str) -> int:
+    msg = update.effective_message
     if caption:
         context.user_data["draft"]["food_type"] = caption[:120]
         await msg.reply_text(f"📸 Thanks! Food: *{md(caption[:120])}*", parse_mode="Markdown")
         return await ask_quantity(update, context)
 
-    await msg.reply_text("📸 Thanks! What food is it? (e.g. \"Pandesal\", \"Chicken adobo with rice\")")
+    await msg.reply_text("What food is it? (e.g. \"Pandesal\", \"Chicken adobo with rice\")")
     return FOOD
 
 
@@ -260,6 +313,10 @@ async def chose_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     hours = int(update.callback_query.data.split(":")[1])
     context.user_data["draft"]["good_for_hours"] = hours
     await answer_choice(update, f"{hours} hrs")
+    return await ask_pickup(update, context)
+
+
+async def ask_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
         "📍 Where can it be picked up?",
         reply_markup=buttons([[("My saved location", "loc:saved")], [("A different spot", "loc:new")]]),
@@ -332,9 +389,7 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     await msg.reply_text("⏳ Posting your listing…")
 
-    tg_file = await context.bot.get_file(draft["photo_file_id"])
-    photo = bytes(await tg_file.download_as_bytearray())
-    photo_url = await storage.upload_photo("donation-photos", photo)
+    photo_url = await storage.upload_photo("donation-photos", draft["photo"])
 
     donation = await asyncio.to_thread(
         repo.create_donation,
@@ -347,6 +402,9 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lng=draft["lng"],
         good_for_hours=draft["good_for_hours"],
         safety_checklist=draft.get("safety_checklist"),
+        allergens=draft.get("allergens"),
+        ai_assisted=draft.get("ai_assisted", False),
+        suggested_price=draft.get("suggested_price"),
     )
     radius_km = donation["search_radius_m"] / 1000
     await msg.reply_text(
@@ -397,6 +455,7 @@ def build_application(token: str) -> Application:
     posting = ConversationHandler(
         entry_points=[MessageHandler(filters.PHOTO, got_photo)],
         states={
+            AI_CONFIRM: [CallbackQueryHandler(chose_ai, pattern=r"^ai:")],
             FOOD: [MessageHandler(text, got_food)],
             QUANTITY: [MessageHandler(text, got_quantity)],
             WEIGHT: [CallbackQueryHandler(chose_weight, pattern=r"^kg:")],
