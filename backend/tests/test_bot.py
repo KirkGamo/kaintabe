@@ -21,7 +21,9 @@ def run(coro):
 
 def make_context():
     tg_file = SimpleNamespace(download_as_bytearray=AsyncMock(return_value=bytearray(b"\xff\xd8fakejpeg")))
-    return SimpleNamespace(user_data={}, bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file)))
+    return SimpleNamespace(
+        user_data={}, bot=SimpleNamespace(get_file=AsyncMock(return_value=tg_file), username="unit_test_bot")
+    )
 
 
 def message(text=None, location=None, photo=False, caption=None):
@@ -127,18 +129,21 @@ def test_onboarding_creates_donor():
     assert donor["pledged_at"] is not None
     assert ctx.user_data == {}
 
-    # /start again: recognized, no re-onboarding
+    # /start again: recognized, no re-onboarding; offered the flash-offer list as a one-tap extra
     u = update_msg(text="/start")
-    assert run(h.start(u, ctx)) == h.END
+    assert run(h.start(u, ctx)) == h.ROLE
     assert "Welcome back" in last_reply(u)
+    keyboard = u.effective_message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert keyboard[0][0].callback_data == "role:recipient"
 
 
-def test_recipient_role_ends_politely():
+def test_recipient_role_asks_location_for_flash_offers():
     ctx = make_context()
     run(h.start(update_msg(text="/start"), ctx))
     u = update_tap("role:recipient")
-    assert run(h.chose_role(u, ctx)) == h.END
-    assert "coming soon" in last_reply(u)
+    assert run(h.chose_role(u, ctx)) == h.IND_LOCATION
+    replies = [c.args[0] for c in u.effective_message.reply_text.call_args_list]
+    assert any("Flash offers" in r for r in replies)
 
 
 def test_photo_before_onboarding_asks_for_start():
@@ -241,7 +246,14 @@ def test_application_builds():
     app = h.build_application("123456:TEST")
     kinds = [getattr(c, "name", None) or type(c).__name__ for c in app.handlers[0]]
     # conversations first; catch-alls last so they only see what no conversation handled
-    assert kinds == ["onboarding", "posting", "CommandHandler", "CallbackQueryHandler", "MessageHandler"]
+    assert kinds == [
+        "onboarding", "posting",
+        "CallbackQueryHandler",  # flash:* claims
+        "CommandHandler",  # /stop
+        "CommandHandler",  # /cancel
+        "CallbackQueryHandler",  # stale buttons
+        "MessageHandler",  # stray text
+    ]
 
 
 def test_storage_upload_roundtrip():

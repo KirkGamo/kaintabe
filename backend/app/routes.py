@@ -5,13 +5,11 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.bot.handlers import md
-from app.services import repo, storage, telegram
+from app.services import notify, repo, storage, telegram
 
 router = APIRouter(prefix="/api")
 
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
-KG_PER_MEAL = 0.4  # same factor as the impact dashboard
 
 
 class ClaimRequest(BaseModel):
@@ -26,22 +24,7 @@ async def create_claim(body: ClaimRequest, background: BackgroundTasks):
     except repo.NotAvailable:
         raise HTTPException(409, "This listing was just claimed by someone else or is no longer available.")
 
-    km = claim["distance_m"] / 1000
-    item = f"{md(claim['food_type'])} ({md(claim['quantity'])})"
-    who = f"*{md(claim['recipient_name'])}*, {km:.1f} km away"
-    if claim["reserved_price"] is not None:
-        text = (
-            f"🛒 *Reserved!* Your {item} was reserved by {who}.\n\n"
-            f"They'll pay you *₱{float(claim['reserved_price']):g}* in person at pickup (cash or GCash). "
-            "Please keep it ready. 💚"
-        )
-    else:
-        text = (
-            f"🎉 *Claimed!* Your {item} was claimed by {who}.\n\n"
-            "They're coming to pick it up. Please keep it ready. "
-            "You'll get a thank-you once pickup is confirmed. 💚"
-        )
-    background.add_task(telegram.send_message, claim["donor_chat_id"], text)
+    background.add_task(telegram.send_message, claim["donor_chat_id"], notify.claimed_text(claim))
     return {
         "id": claim["id"],
         "donation_id": claim["donation_id"],
@@ -80,23 +63,7 @@ async def confirm_claim(
     except repo.NotAvailable:
         raise HTTPException(409, "This pickup was already confirmed.")
 
-    impact = ""
-    if done["est_kg"]:
-        kg = float(done["est_kg"])
-        impact = f"You rescued ~{kg:g} kg ≈ {max(1, round(kg / KG_PER_MEAL))} meals. "
-    background.add_task(
-        telegram.send_photo,
-        done["donor_chat_id"],
-        data,
-        (
-            f"✅ *Sold and picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
-            f"went to *{md(done['recipient_name'])}* for ₱{float(done['reserved_price']):g}.\n\n"
-            f"{impact}Salamat for not letting it go to waste! 💚"
-            if done["reserved_price"] is not None
-            else f"✅ *Picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
-            f"is now with *{md(done['recipient_name'])}*.\n\n{impact}Salamat for sharing! 💚"
-        ),
-    )
+    background.add_task(telegram.send_photo, done["donor_chat_id"], data, notify.picked_up_text(done))
     return {
         "id": done["id"],
         "donation_id": done["donation_id"],

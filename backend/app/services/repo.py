@@ -142,3 +142,57 @@ def confirm_pickup(claim_id: str, photo_url: str) -> dict:
             (claim["recipient_id"], claim["donation_id"]),
         ).fetchone()
         return {**claim, **details}
+
+
+# --- individuals & flash offers -------------------------------------------------
+
+def upsert_individual(chat_id: int, name: str, lat: float, lng: float, via_bot: str) -> dict:
+    """Opt a person in to flash offers (or update their spot / re-activate after /stop)."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            insert into recipients (name, type, lat, lng, service_radius_m, verified, telegram_chat_id, via_bot, active)
+            values (%s, 'individual', %s, %s, 3000, false, %s, %s, true)
+            on conflict (telegram_chat_id, via_bot) where telegram_chat_id is not null do update
+              set name = excluded.name, lat = excluded.lat, lng = excluded.lng, active = true
+            returning *
+            """,
+            (name, lat, lng, chat_id, via_bot),
+        ).fetchone()
+
+
+def get_individual(chat_id: int, via_bot: str) -> dict | None:
+    with db.connect() as conn:
+        return conn.execute(
+            "select * from recipients where type = 'individual' and telegram_chat_id = %s and via_bot = %s",
+            (chat_id, via_bot),
+        ).fetchone()
+
+
+def set_individual_active(chat_id: int, via_bot: str, active: bool) -> bool:
+    """Returns False if nothing changed (never opted in, or already in that state)."""
+    with db.connect() as conn:
+        return conn.execute(
+            "update recipients set active = %s where type = 'individual' and telegram_chat_id = %s and via_bot = %s"
+            " and active is distinct from %s",
+            (active, chat_id, via_bot, active),
+        ).rowcount > 0
+
+
+def claim_flash_offers(via_bot: str) -> list[dict]:
+    """Reserve (and return) the flash offers this bot should send now; each is returned only once ever."""
+    with db.connect() as conn:
+        return conn.execute("select * from claim_flash_offers(%s)", (via_bot,)).fetchall()
+
+
+def pending_pickup(recipient_id) -> dict | None:
+    """The individual's most recent claim still waiting for a pickup photo (last 24 h)."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select c.id, d.food_type from claims c join donations d on d.id = c.donation_id
+             where c.recipient_id = %s and c.confirmed_at is null and c.claimed_at > now() - interval '24 hours'
+             order by c.claimed_at desc limit 1
+            """,
+            (recipient_id,),
+        ).fetchone()

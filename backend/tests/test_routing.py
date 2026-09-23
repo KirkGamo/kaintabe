@@ -33,10 +33,14 @@ class FakeTelegram(BaseRequest):
         pass
 
     async def do_request(self, url, method, request_data=None, **kwargs):
+        if "/file/bot" in url:  # downloading a file the user sent
+            return 200, b"\xff\xd8fake-photo"
         endpoint = url.rsplit("/", 1)[-1]
         params = request_data.parameters if request_data else {}
         self.sent.append((endpoint, params))
-        if endpoint == "getMe":
+        if endpoint == "getFile":
+            result = {"file_id": "f1", "file_unique_id": "u1", "file_path": "photos/f1.jpg"}
+        elif endpoint == "getMe":
             result = {"id": 1, "is_bot": True, "first_name": "Dev", "username": "test_bot"}
         elif endpoint in ("sendMessage", "editMessageText"):
             result = {"message_id": next(self._ids), "date": 0, "chat": CHAT, "text": params.get("text", "")}
