@@ -1,5 +1,6 @@
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Json  # noqa: F401  (re-exported for callers)
 
 from app.config import settings
 
