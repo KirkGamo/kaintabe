@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import DonationCard from './components/DonationCard'
 import MapView from './components/MapView'
+import { useClaims } from './hooks/useClaims'
 import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
+import { claimDonation } from './lib/api'
+import { distanceM } from './lib/geo'
 import { timeLeft } from './lib/urgency'
 
 const VIEWER_KEY = 'kaintabe.viewer'
@@ -15,12 +18,41 @@ function loadViewerId() {
   }
 }
 
+/**
+ * Split listings from the viewer's point of view:
+ *  open — unclaimed, not expired, and its search radius reaches the viewer (nearest first)
+ *  out  — unclaimed but its radius doesn't reach the viewer yet (map only)
+ *  mine — claimed by the viewer, awaiting pickup
+ * Listings claimed by other orgs are hidden.
+ */
+function classify(donations, claimsByDonation, viewer, now) {
+  const open = []
+  const out = []
+  const mine = []
+  if (!viewer) return { open, out, mine }
+  for (const d of donations) {
+    const distance = distanceM(viewer, d)
+    if (d.status === 'claimed') {
+      if (claimsByDonation[d.id]?.recipient_id === viewer.id) mine.push({ donation: d, distance, mode: 'mine' })
+    } else if (timeLeft(d, now).leftMs > 0) {
+      if (distance <= d.search_radius_m) open.push({ donation: d, distance, mode: 'open' })
+      else out.push({ donation: d, distance, mode: 'out' })
+    }
+  }
+  open.sort((a, b) => a.distance - b.distance)
+  mine.sort((a, b) => a.distance - b.distance)
+  return { open, out, mine }
+}
+
 export default function App() {
   const now = useNow()
   const { donations, live } = useDonations()
+  const { claimsByDonation, addClaim } = useClaims()
   const recipients = useRecipients()
   const [viewerId, setViewerId] = useState(loadViewerId)
   const [selectedId, setSelectedId] = useState(null)
+  const [busyId, setBusyId] = useState(null)
+  const [toast, setToast] = useState(null)
 
   // Default to the first partner org once loaded
   useEffect(() => {
@@ -35,23 +67,47 @@ export default function App() {
     }
   }, [viewerId])
 
-  const viewer = recipients.find((r) => r.id === viewerId)
+  useEffect(() => {
+    if (!toast) return
+    const id = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(id)
+  }, [toast])
 
-  // Open listings first (most urgent on top), claimed ones after; hide ones that ran out
-  const visible = useMemo(
-    () =>
-      donations
-        .filter((d) => d.status === 'claimed' || timeLeft(d, now).leftMs > 0)
-        .sort((a, b) => {
-          const ca = a.status === 'claimed'
-          const cb = b.status === 'claimed'
-          if (ca !== cb) return ca ? 1 : -1
-          return new Date(a.expires_at) - new Date(b.expires_at)
-        }),
-    [donations, now],
+  const viewer = recipients.find((r) => r.id === viewerId)
+  const { open, out, mine } = useMemo(
+    () => classify(donations, claimsByDonation, viewer, now),
+    [donations, claimsByDonation, viewer, now],
   )
-  const selected = visible.find((d) => d.id === selectedId) ?? null
-  const openCount = visible.filter((d) => d.status !== 'claimed').length
+  const mapItems = [...out, ...open, ...mine]
+  const selected = mapItems.find((i) => i.donation.id === selectedId)?.donation ?? null
+
+  async function handleClaim(d) {
+    setBusyId(d.id)
+    try {
+      const claim = await claimDonation(d.id, viewer.id)
+      addClaim(claim)
+      setSelectedId(d.id)
+      setToast({ kind: 'ok', text: `Claimed ${d.food_type}! The donor has been notified.` })
+    } catch (e) {
+      setToast({ kind: 'error', text: e.message })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const card = ({ donation: d, distance, mode }) => (
+    <DonationCard
+      key={d.id}
+      donation={d}
+      mode={mode}
+      distance={distance}
+      now={now}
+      selected={d.id === selectedId}
+      onSelect={(x) => setSelectedId(x.id)}
+      onClaim={handleClaim}
+      busy={busyId === d.id}
+    />
+  )
 
   return (
     <div className="h-dvh flex flex-col bg-slate-50 text-slate-900">
@@ -91,7 +147,7 @@ export default function App() {
       <main className="flex-1 min-h-0 flex flex-col md:flex-row">
         <section className="h-[45dvh] md:h-auto md:flex-1 relative">
           <MapView
-            donations={visible}
+            items={mapItems}
             recipients={recipients}
             viewer={viewer}
             selected={selected}
@@ -101,28 +157,43 @@ export default function App() {
         </section>
 
         <aside className="flex-1 md:flex-none md:w-100 min-h-0 overflow-y-auto p-3 space-y-2 border-t md:border-t-0 md:border-l border-slate-200">
-          <h2 className="text-sm font-semibold text-slate-600 px-1">
-            {openCount} open listing{openCount === 1 ? '' : 's'}
+          {mine.length > 0 && (
+            <>
+              <h2 className="text-sm font-semibold text-indigo-700 px-1">Your pickups ({mine.length})</h2>
+              {mine.map(card)}
+            </>
+          )}
+
+          <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
+            {open.length} listing{open.length === 1 ? '' : 's'} near you
           </h2>
-          {visible.length === 0 && (
-            <div className="text-center text-slate-500 text-sm py-10">
+          {open.length === 0 && (
+            <div className="text-center text-slate-500 text-sm py-8">
               <div className="text-4xl mb-2">🌱</div>
-              No surplus food right now.
+              Nothing within reach right now.
               <br />
-              New listings from the Telegram bot appear here instantly.
+              New listings appear here instantly.
+              {out.length > 0 && (
+                <p className="mt-2 text-xs">
+                  {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (faded
+                  pins).
+                </p>
+              )}
             </div>
           )}
-          {visible.map((d) => (
-            <DonationCard
-              key={d.id}
-              donation={d}
-              now={now}
-              selected={d.id === selectedId}
-              onSelect={(x) => setSelectedId(x.id)}
-            />
-          ))}
+          {open.map(card)}
         </aside>
       </main>
+
+      {toast && (
+        <div
+          role="status"
+          className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-1000 max-w-[90vw] px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium
+            ${toast.kind === 'ok' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}
+        >
+          {toast.text}
+        </div>
+      )}
     </div>
   )
 }

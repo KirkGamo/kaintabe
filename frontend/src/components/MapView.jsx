@@ -7,7 +7,7 @@ import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
 const ILOILO = [10.7102, 122.5553]
 
 // Emoji-in-a-circle pins: no image assets to break under the bundler
-function pinIcon({ color, emoji, size = 34, ring = false }) {
+function pinIcon({ color, emoji, size = 34, ring = false, faded = false }) {
   return L.divIcon({
     className: '',
     iconSize: [size, size],
@@ -15,7 +15,7 @@ function pinIcon({ color, emoji, size = 34, ring = false }) {
     popupAnchor: [0, -size / 2],
     html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${color};
       display:flex;align-items:center;justify-content:center;font-size:${size * 0.5}px;
-      border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,.35);
+      border:3px solid white;opacity:${faded ? 0.55 : 1};box-shadow:0 1px 4px rgba(0,0,0,.35);
       ${ring ? `outline:3px solid ${color};outline-offset:2px;` : ''}">${emoji}</div>`,
   })
 }
@@ -28,7 +28,8 @@ function FlyTo({ target }) {
   return null
 }
 
-export default function MapView({ donations, recipients, viewer, selected, onSelect, now }) {
+// items: [{ donation, mode: "open" | "out" | "mine" }] — "out" = listing whose reach doesn't cover the viewer
+export default function MapView({ items, recipients, viewer, selected, onSelect, now }) {
   return (
     <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false}>
       <TileLayer
@@ -52,22 +53,23 @@ export default function MapView({ donations, recipients, viewer, selected, onSel
         </Marker>
       ))}
 
-      {donations.map((d) => {
+      {items.map(({ donation: d, mode }) => {
         const { leftMs, fraction } = timeLeft(d, now)
-        const claimed = d.status === 'claimed'
-        const color = claimed ? '#64748b' : URGENCY_COLORS[urgency(fraction)].hex
+        const mine = mode === 'mine'
+        const out = mode === 'out'
+        const color = mine ? '#4f46e5' : out ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
         const isSelected = selected?.id === d.id
         return (
           <Fragment key={d.id}>
             {/* Outline-only reach circles so overlapping listings stay readable; fill the selected one */}
-            {!claimed && (
+            {!mine && (
               <Circle
                 center={[d.lat, d.lng]}
                 radius={d.search_radius_m}
                 pathOptions={{
                   color,
                   weight: isSelected ? 2 : 1,
-                  opacity: isSelected ? 0.9 : 0.5,
+                  opacity: isSelected ? 0.9 : out ? 0.35 : 0.5,
                   fillOpacity: isSelected ? 0.12 : 0,
                   dashArray: '4 6',
                 }}
@@ -75,14 +77,20 @@ export default function MapView({ donations, recipients, viewer, selected, onSel
             )}
             <Marker
               position={[d.lat, d.lng]}
-              icon={pinIcon({ color, emoji: claimed ? '✔️' : '🍱', ring: isSelected })}
-              zIndexOffset={isSelected ? 1000 : 0}
+              icon={pinIcon({ color, emoji: mine ? '✔️' : '🍱', ring: isSelected, faded: out })}
+              zIndexOffset={isSelected ? 1000 : out ? -50 : 0}
               eventHandlers={{ click: () => onSelect(d) }}
             >
               <Popup>
                 <strong>{d.food_type}</strong> · {d.quantity}
                 <br />
-                {claimed ? 'Claimed' : `${formatLeft(leftMs)} left`}
+                {mine ? 'Claimed by you' : `${formatLeft(leftMs)} left`}
+                {out && (
+                  <>
+                    <br />
+                    <em>Not in your area yet: its reach doesn't cover you</em>
+                  </>
+                )}
               </Popup>
             </Marker>
           </Fragment>
