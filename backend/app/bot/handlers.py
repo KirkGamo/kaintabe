@@ -9,6 +9,8 @@ import re
 import warnings
 from datetime import datetime, timezone
 
+import httpx
+import psycopg
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -18,6 +20,7 @@ from telegram import (
     Update,
     WebAppInfo,
 )
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -289,13 +292,14 @@ async def got_org_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def got_org_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    o = context.user_data.pop("org")
+    o = context.user_data["org"]  # keep the answers until the save succeeds, so a retry works
     org = await asyncio.to_thread(
         repo.create_org, update.effective_chat.id, context.bot.username,
         name=o["name"], org_kind=o["org_kind"], lat=o["lat"], lng=o["lng"],
         service_radius_m=o["service_radius_m"], hours=o["hours"],
         capacity=update.effective_message.text.strip()[:60],
     )
+    context.user_data.pop("org", None)
     await reply_org_welcome(update, org)
     return END
 
@@ -892,11 +896,16 @@ async def unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("bot handler failed", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(
-            "😕 Something went wrong on our side (probably a connection hiccup).\n\n"
-            "If you were posting food, just send the photo again to start over. "
-            "Otherwise, send /start."
-        )
+        # Only blame the connection when it actually was one; a bug shouldn't read as "try again later"
+        network = isinstance(context.error, (NetworkError, psycopg.OperationalError, httpx.HTTPError))
+        reason = "a connection hiccup, please try again" if network else "our mistake, and it's been logged"
+        try:
+            await update.effective_message.reply_text(
+                f"😕 Something went wrong on our side ({reason}).\n\n"
+                "If you were posting food, just send the photo again to start over. Otherwise, send /start."
+            )
+        except Exception:  # noqa: BLE001 - e.g. Telegram itself unreachable; the log has the details
+            pass
 
 
 # ---------------------------------------------------------------------------

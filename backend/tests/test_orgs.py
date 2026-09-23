@@ -39,8 +39,7 @@ def tap(chat, data):
 
 def cleanup():
     with db.connect() as conn:
-        conn.execute("delete from recipients where type = 'partner_org' and telegram_chat_id in (%s, %s) "
-                     "and id <> %s", (A, B, JARO))
+        conn.execute("delete from recipients where telegram_chat_id in (%s, %s) and id <> %s", (A, B, JARO))
         conn.execute("update recipients set telegram_chat_id = null, via_bot = null, review_status = 'approved' "
                      "where id = %s and telegram_chat_id in (%s, %s)", (JARO, A, B))
 
@@ -133,3 +132,28 @@ def test_map_url_prefers_web_url_then_https_origin():
 def test_donor_notifications_carry_map_button():
     with patch.object(tg_out.settings, "web_url", MAP):
         assert tg_out.map_markup()["inline_keyboard"][0][0]["web_app"]["url"] == MAP
+
+
+def test_individual_on_flash_list_can_also_register_an_org():
+    """Regression: the same Telegram account may be an individual AND an org rep (was a unique-index crash)."""
+    run(msg(A, "/start"), tap(A, "role:recipient"), msg(A, location=(10.7300, 122.5600)))  # joins flash list
+    fake = run(msg(A, "/start"), tap(A, "role:org"), tap(A, "orglink:new"), msg(A, "Jaro Youth Kitchen"),
+               tap(A, "okind:pantry"), msg(A, location=(10.7245, 122.5570)), tap(A, "orad:3"),
+               msg(A, "24 hours"), msg(A, "40 meals/day"))
+    assert not any("Something went wrong" in t for t in texts(fake))
+    assert org_row(A)["name"] == "Jaro Youth Kitchen"
+    with db.connect() as conn:
+        kinds = {r["type"] for r in conn.execute(
+            "select type from recipients where telegram_chat_id = %s and via_bot = %s", (A, BOT))}
+    assert kinds == {"individual", "partner_org"}
+
+
+def test_error_message_does_not_blame_connection_for_bugs():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    for err, expected in ((KeyError("org"), "our mistake"), (h.NetworkError("timeout"), "connection hiccup")):
+        reply = AsyncMock()
+        with patch.object(Update, "effective_message", new=SimpleNamespace(reply_text=reply)):
+            asyncio.run(h.on_error(Update(update_id=1), SimpleNamespace(error=err)))
+        assert expected in reply.await_args.args[0]

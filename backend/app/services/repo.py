@@ -153,7 +153,7 @@ def upsert_individual(chat_id: int, name: str, lat: float, lng: float, via_bot: 
             """
             insert into recipients (name, type, lat, lng, service_radius_m, verified, telegram_chat_id, via_bot, active)
             values (%s, 'individual', %s, %s, 3000, false, %s, %s, true)
-            on conflict (telegram_chat_id, via_bot) where telegram_chat_id is not null do update
+            on conflict (telegram_chat_id, via_bot, type) where telegram_chat_id is not null do update
               set name = excluded.name, lat = excluded.lat, lng = excluded.lng, active = true
             returning *
             """,
