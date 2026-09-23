@@ -196,3 +196,44 @@ def pending_pickup(recipient_id) -> dict | None:
             """,
             (recipient_id,),
         ).fetchone()
+
+
+# --- donor's own listings ----------------------------------------------------------
+
+def my_active_listings(donor_id) -> list[dict]:
+    """Up to 10 of the donor's listings that are still live or claimed, newest first."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select d.id, d.food_type, d.quantity, d.status, d.listing_type, d.current_price, d.expires_at,
+                   r.name as claimer_name
+              from donations d
+              left join claims c on c.donation_id = d.id
+              left join recipients r on r.id = c.recipient_id
+             where d.donor_id = %s
+               and (d.status = 'claimed' or (d.status in ('posted', 'escalated') and d.expires_at > now()))
+             order by d.created_at desc
+             limit 10
+            """,
+            (donor_id,),
+        ).fetchall()
+
+
+def withdraw_donation(donation_id: str, donor_id) -> dict:
+    """Take down the donor's own unclaimed listing; NotAvailable if it was claimed/ended meanwhile."""
+    with db.connect() as conn:
+        try:
+            return conn.execute("select * from withdraw_donation(%s, %s)", (donation_id, donor_id)).fetchone()
+        except psycopg.errors.RaiseException as e:
+            if "not_withdrawable" in str(e):
+                raise NotAvailable from e
+            raise
+
+
+def claimer_of(donation_id: str) -> str | None:
+    with db.connect() as conn:
+        row = conn.execute(
+            "select r.name from claims c join recipients r on r.id = c.recipient_id where c.donation_id = %s",
+            (donation_id,),
+        ).fetchone()
+        return row["name"] if row else None

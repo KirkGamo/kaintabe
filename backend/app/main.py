@@ -20,6 +20,14 @@ log = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/telegram/webhook"
 
+BOT_COMMANDS = [
+    ("start", "Start or see your options"),
+    ("mylistings", "See or take down food you posted"),
+    ("profile", "Update your donor details"),
+    ("stop", "Stop free-food offers"),
+    ("cancel", "Cancel what you're doing"),
+]
+
 
 async def start_bot(bot, mode: str) -> None:
     """Connect to Telegram, retrying with backoff; a flaky network must not block the API."""
@@ -32,6 +40,10 @@ async def start_bot(bot, mode: str) -> None:
             log.warning("Telegram unreachable (%s); retrying in %ss", type(e).__name__, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30)
+    try:  # the "/" menu in the chat; cosmetic, so never block startup on it
+        await bot.bot.set_my_commands(BOT_COMMANDS)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not set bot commands: %s", type(e).__name__)
     await bot.start()
     if mode == "webhook":
         await bot.bot.set_webhook(
