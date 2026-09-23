@@ -135,7 +135,8 @@ export default function App() {
     try {
       const done = await confirmPickup(claim.id, viewer.id, file)
       addClaim({ ...claim, confirmed_at: done.confirmed_at, confirmation_photo_url: done.confirmation_photo_url })
-      const meals = d.est_kg ? ` ~${Math.max(1, Math.round(Number(d.est_kg) / 0.4))} meals rescued.` : ''
+      const n = d.est_kg ? Math.max(1, Math.round(Number(d.est_kg) / 0.4)) : 0
+      const meals = n ? ` ~${n} meal${n === 1 ? '' : 's'} rescued.` : ''
       setToast({ kind: 'ok', text: `Pickup confirmed, thank you!${meals} The donor has been notified.` })
     } catch (e) {
       setToast({ kind: 'error', text: e.message })

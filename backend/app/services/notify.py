@@ -31,7 +31,8 @@ def picked_up_text(done: dict) -> str:
     impact = ""
     if done["est_kg"]:
         kg = float(done["est_kg"])
-        impact = f"You rescued ~{kg:g} kg ≈ {max(1, round(kg / KG_PER_MEAL))} meals. "
+        meals = max(1, round(kg / KG_PER_MEAL))
+        impact = f"You rescued ~{kg:g} kg ≈ {meals} meal{'' if meals == 1 else 's'}. "
     item = f"{md(done['food_type'])} ({md(done['quantity'])})"
     if done["reserved_price"] is not None:
         return (

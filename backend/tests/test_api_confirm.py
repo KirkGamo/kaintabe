@@ -103,3 +103,10 @@ def test_confirming_sale_marks_sold(upload, send):
         conn.execute("delete from donations where id = %s", (donation_id,))
         conn.commit()
         conn.close()
+
+
+def test_meal_wording_singular_and_plural():
+    from app.services import notify
+    base = {"food_type": "Pizza", "quantity": "2 pcs", "recipient_name": "Kirk", "reserved_price": None}
+    assert "≈ 1 meal." in notify.picked_up_text({**base, "est_kg": 0.5})
+    assert "≈ 5 meals." in notify.picked_up_text({**base, "est_kg": 2})
