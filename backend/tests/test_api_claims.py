@@ -69,3 +69,25 @@ def test_cors_allows_frontend():
     )
     assert res.status_code == 200
     assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+@pytest.fixture
+def sale_listing():
+    conn = db.connect()
+    donation_id = insert_donation(conn, food_type="Sale test pandesal", quantity="40 pcs",
+                                  listing_type="sale", original_price=100, current_price=70)
+    conn.commit()
+    yield str(donation_id)
+    conn.execute("delete from claims where donation_id = %s", (donation_id,))
+    conn.execute("delete from donations where id = %s", (donation_id,))
+    conn.commit()
+    conn.close()
+
+
+@patch("app.routes.telegram.send_message", new_callable=AsyncMock)
+def test_reserving_sale_locks_price_and_tells_donor(send, sale_listing):
+    res = client.post("/api/claims", json={"donation_id": sale_listing, "recipient_id": JARO})
+    assert res.status_code == 201, res.text
+    assert float(res.json()["reserved_price"]) == 70
+    text = send.await_args.args[1]
+    assert "Reserved" in text and "₱70" in text and "pay you" in text

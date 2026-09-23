@@ -5,6 +5,7 @@ conversations with mock updates without talking to Telegram.
 """
 import asyncio
 import logging
+import re
 import warnings
 
 from telegram import (
@@ -36,7 +37,7 @@ warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 # Onboarding states
 ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE = range(5)
 # Posting states
-FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM = range(10, 18)
+FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE = range(10, 20)
 
 END = ConversationHandler.END
 
@@ -262,7 +263,7 @@ async def chose_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         suggested_price=ai["suggested_price_php"],
         ai_assisted=True,
     )
-    return await ask_pickup(update, context)
+    return await after_details(update, context)
 
 
 async def ask_manual(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str) -> int:
@@ -313,6 +314,62 @@ async def chose_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     hours = int(update.callback_query.data.split(":")[1])
     context.user_data["draft"]["good_for_hours"] = hours
     await answer_choice(update, f"{hours} hrs")
+    return await after_details(update, context)
+
+
+async def after_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Businesses may sell at a discount; households go straight to pickup (free donation)."""
+    if context.user_data["donor"]["type"] != "business":
+        return await ask_pickup(update, context)
+    await update.effective_message.reply_text(
+        "How do you want to share it?",
+        reply_markup=buttons([[("🎁 Donate free", "lt:donation"), ("🏷️ Sell at a discount", "lt:sale")]]),
+    )
+    return LISTING_TYPE
+
+
+async def chose_listing_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query.data == "lt:donation":
+        await answer_choice(update, "Donate free")
+        return await ask_pickup(update, context)
+    await answer_choice(update, "Sell at a discount")
+    minutes = await asyncio.to_thread(repo.sale_window_minutes)
+    text = (
+        "🏷️ What's your discounted price for the whole lot, in pesos?\n"
+        "Buyers reserve it here and pay you in person at pickup (cash or GCash).\n\n"
+        f"The price drops over the next {minutes:g} min. If it's still unsold then, it becomes a free donation "
+        "so nothing goes to waste."
+    )
+    suggested = context.user_data["draft"].get("suggested_price")
+    if suggested:
+        await update.effective_message.reply_text(
+            f"{text}\n\nTap the suggestion or type your own price:",
+            reply_markup=buttons([[(f"₱{suggested:g} (suggested)", f"price:{suggested:g}")]]),
+        )
+    else:
+        await update.effective_message.reply_text(f"{text}\n\nType a price, e.g. 120")
+    return PRICE
+
+
+def parse_price(text: str) -> float | None:
+    """'₱1,200', 'P85.50', '120 pesos' -> whole pesos; None if missing or out of range."""
+    m = re.search(r"\d+(?:\.\d+)?", text.replace(",", ""))
+    if not m:
+        return None
+    price = round(float(m.group()))
+    return price if 1 <= price <= 100_000 else None
+
+
+async def got_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    if update.callback_query:
+        price = float(update.callback_query.data.split(":")[1])
+        await answer_choice(update, f"₱{price:g}")
+    else:
+        price = parse_price(update.effective_message.text)
+        if price is None:
+            await update.effective_message.reply_text("Please type the price as a number of pesos, e.g. 120")
+            return None
+    context.user_data["draft"].update(listing_type="sale", price=price)
     return await ask_pickup(update, context)
 
 
@@ -405,13 +462,25 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         allergens=draft.get("allergens"),
         ai_assisted=draft.get("ai_assisted", False),
         suggested_price=draft.get("suggested_price"),
+        listing_type=draft.get("listing_type", "donation"),
+        price=draft.get("price"),
     )
     radius_km = donation["search_radius_m"] / 1000
+    if donation["listing_type"] == "sale":
+        details = (
+            f"🏷️ For sale at ₱{draft['price']:g}. Buyers within {radius_km:g} km can reserve it and pay you at pickup. "
+            "If it's still unsold when the price timer ends, it becomes a free donation.\n"
+            "I'll message you as soon as it's reserved."
+        )
+    else:
+        details = (
+            f"Nearby community kitchens within {radius_km:g} km can see it. "
+            "If no one claims it soon, I'll widen the search automatically.\n"
+            "I'll message you as soon as it's claimed."
+        )
     await msg.reply_text(
         f"✅ *Live now!* {md(draft['food_type'])} ({md(draft['quantity'])})\n\n"
-        f"Nearby community kitchens within {radius_km:g} km can see it. "
-        f"If no one claims it soon, I'll widen the search automatically.\n"
-        f"I'll message you as soon as it's claimed. ⏱ Good for {draft['good_for_hours']} hrs.",
+        f"{details} ⏱ Good for {draft['good_for_hours']} hrs.",
         parse_mode="Markdown",
     )
     return END
@@ -456,6 +525,8 @@ def build_application(token: str) -> Application:
         entry_points=[MessageHandler(filters.PHOTO, got_photo)],
         states={
             AI_CONFIRM: [CallbackQueryHandler(chose_ai, pattern=r"^ai:")],
+            LISTING_TYPE: [CallbackQueryHandler(chose_listing_type, pattern=r"^lt:")],
+            PRICE: [CallbackQueryHandler(got_price, pattern=r"^price:"), MessageHandler(text, got_price)],
             FOOD: [MessageHandler(text, got_food)],
             QUANTITY: [MessageHandler(text, got_quantity)],
             WEIGHT: [CallbackQueryHandler(chose_weight, pattern=r"^kg:")],

@@ -84,3 +84,22 @@ def test_rejects_non_image_and_empty(upload, claim):
 
 def test_unknown_claim_gets_404():
     assert confirm("00000000-0000-0000-0000-000000000000").status_code == 404
+
+
+@patch("app.routes.telegram.send_photo", new_callable=AsyncMock)
+@patch("app.routes.storage.upload_photo", new_callable=AsyncMock, return_value=PHOTO_URL)
+def test_confirming_sale_marks_sold(upload, send):
+    conn = db.connect()
+    donation_id = insert_donation(conn, listing_type="sale", original_price=90, current_price=45, est_kg=1)
+    claim = conn.execute("select * from claim_donation(%s, %s)", (donation_id, JARO)).fetchone()
+    conn.commit()
+    try:
+        res = confirm(str(claim["id"]))
+        assert res.status_code == 200 and res.json()["donation_status"] == "sold"
+        caption = send.await_args.args[2]
+        assert "Sold" in caption and "₱45" in caption
+    finally:
+        conn.execute("delete from claims where donation_id = %s", (donation_id,))
+        conn.execute("delete from donations where id = %s", (donation_id,))
+        conn.commit()
+        conn.close()

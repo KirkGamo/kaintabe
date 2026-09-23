@@ -60,7 +60,10 @@ def cleanup():
 @pytest.fixture(autouse=True)
 def no_ai():
     """Bot tests never call the real AI; individual tests override the return value."""
-    with patch.object(h.ai_intake, "parse_food_photo", new_callable=AsyncMock, return_value=None) as ai,          patch.object(h.ai_intake, "enabled", return_value=True):
+    with (
+        patch.object(h.ai_intake, "parse_food_photo", new_callable=AsyncMock, return_value=None) as ai,
+        patch.object(h.ai_intake, "enabled", return_value=True),
+    ):
         yield ai
 
 
@@ -71,11 +74,11 @@ def clean_test_donor():
     cleanup()
 
 
-def onboard(ctx, name="Test Bakery", location=(10.7141, 122.5519)):
+def onboard(ctx, name="Test Bakery", location=(10.7141, 122.5519), donor_type="household"):
     assert run(h.start(update_msg(text="/start"), ctx)) == h.ROLE
     assert run(h.chose_role(update_tap("role:donor"), ctx)) == h.NAME
     assert run(h.got_name(update_msg(text=name), ctx)) == h.DONOR_TYPE
-    assert run(h.chose_type(update_tap("type:business"), ctx)) == h.LOCATION
+    assert run(h.chose_type(update_tap(f"type:{donor_type}"), ctx)) == h.LOCATION
     assert run(h.location_expected(update_msg(text="Jaro"), ctx)) is None  # typed text: stay, re-prompt
     assert run(h.got_location(update_msg(location=location), ctx)) == h.PLEDGE
     u = update_tap("pledge:yes")
@@ -113,7 +116,7 @@ def donation_count():
 
 def test_onboarding_creates_donor():
     ctx = make_context()
-    u = onboard(ctx)
+    u = onboard(ctx, donor_type="business")
     assert "all set" in last_reply(u)
 
     with db.connect() as conn:
@@ -339,3 +342,71 @@ def test_no_ai_key_goes_straight_to_manual_silently():
         assert run(h.got_photo(u, ctx)) == h.FOOD
     replies = [c.args[0] for c in u.effective_message.reply_text.call_args_list]
     assert not any("Looking at your photo" in r for r in replies)
+
+
+# --- sale tier -------------------------------------------------------------
+
+def details_as_business(ctx, ai=False):
+    """Business donor fills details; returns the state after the details step."""
+    onboard(ctx, donor_type="business")
+    if ai:
+        run(h.got_photo(update_msg(photo=True), ctx))
+        return run(h.chose_ai(update_tap("ai:ok"), ctx))
+    run(h.got_photo(update_msg(photo=True, caption="Ensaymada"), ctx))
+    run(h.got_quantity(update_msg(text="12 pcs"), ctx))
+    run(h.chose_weight(update_tap("kg:0"), ctx))
+    return run(h.chose_hours(update_tap("hrs:8"), ctx))
+
+
+@patch.object(h.storage, "upload_photo", new_callable=AsyncMock, return_value="https://example.com/s.jpg")
+def test_business_sells_with_typed_price(upload):
+    ctx = make_context()
+    assert details_as_business(ctx) == h.LISTING_TYPE
+    u = update_tap("lt:sale")
+    assert run(h.chose_listing_type(u, ctx)) == h.PRICE
+    assert "Type a price" in last_reply(u)  # no AI suggestion without AI
+
+    assert run(h.got_price(update_msg(text="cheap po"), ctx)) is None  # re-ask, stay
+    assert run(h.got_price(update_msg(text="₱1,200"), ctx)) == h.PICKUP
+    run(h.chose_pickup(update_tap("loc:saved"), ctx))
+    done = pass_safety(ctx)
+    assert "For sale at ₱1200" in last_reply(done)
+
+    d = fetch_donation()
+    assert d["listing_type"] == "sale"
+    assert float(d["original_price"]) == 1200 and float(d["current_price"]) == 1200
+
+
+@patch.object(h.storage, "upload_photo", new_callable=AsyncMock, return_value="https://example.com/s.jpg")
+def test_business_taps_ai_suggested_price(upload, no_ai):
+    no_ai.return_value = ai_listing(suggested_price_php=60)
+    ctx = make_context()
+    assert details_as_business(ctx, ai=True) == h.LISTING_TYPE
+    u = update_tap("lt:sale")
+    run(h.chose_listing_type(u, ctx))
+    keyboard = u.effective_message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert keyboard[0][0].callback_data == "price:60"
+
+    assert run(h.got_price(update_tap("price:60"), ctx)) == h.PICKUP
+    run(h.chose_pickup(update_tap("loc:saved"), ctx))
+    pass_safety(ctx)
+    assert float(fetch_donation()["current_price"]) == 60
+
+
+@patch.object(h.storage, "upload_photo", new_callable=AsyncMock, return_value="https://example.com/s.jpg")
+def test_business_can_still_donate_free(upload):
+    ctx = make_context()
+    details_as_business(ctx)
+    assert run(h.chose_listing_type(update_tap("lt:donation"), ctx)) == h.PICKUP
+    run(h.chose_pickup(update_tap("loc:saved"), ctx))
+    pass_safety(ctx)
+    d = fetch_donation()
+    assert d["listing_type"] == "donation" and d["original_price"] is None and d["current_price"] is None
+
+
+def test_price_parsing():
+    assert h.parse_price("₱1,200 pesos") == 1200
+    assert h.parse_price("P85.50") == 86
+    assert h.parse_price("120") == 120
+    assert h.parse_price("free") is None
+    assert h.parse_price("0") is None

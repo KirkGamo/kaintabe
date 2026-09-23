@@ -27,19 +27,27 @@ async def create_claim(body: ClaimRequest, background: BackgroundTasks):
         raise HTTPException(409, "This listing was just claimed by someone else or is no longer available.")
 
     km = claim["distance_m"] / 1000
-    background.add_task(
-        telegram.send_message,
-        claim["donor_chat_id"],
-        f"🎉 *Claimed!* Your {md(claim['food_type'])} ({md(claim['quantity'])}) "
-        f"was claimed by *{md(claim['recipient_name'])}*, {km:.1f} km away.\n\n"
-        "They're coming to pick it up. Please keep it ready. "
-        "You'll get a thank-you once pickup is confirmed. 💚",
-    )
+    item = f"{md(claim['food_type'])} ({md(claim['quantity'])})"
+    who = f"*{md(claim['recipient_name'])}*, {km:.1f} km away"
+    if claim["reserved_price"] is not None:
+        text = (
+            f"🛒 *Reserved!* Your {item} was reserved by {who}.\n\n"
+            f"They'll pay you *₱{float(claim['reserved_price']):g}* in person at pickup (cash or GCash). "
+            "Please keep it ready. 💚"
+        )
+    else:
+        text = (
+            f"🎉 *Claimed!* Your {item} was claimed by {who}.\n\n"
+            "They're coming to pick it up. Please keep it ready. "
+            "You'll get a thank-you once pickup is confirmed. 💚"
+        )
+    background.add_task(telegram.send_message, claim["donor_chat_id"], text)
     return {
         "id": claim["id"],
         "donation_id": claim["donation_id"],
         "recipient_id": claim["recipient_id"],
         "claimed_at": claim["claimed_at"],
+        "reserved_price": claim["reserved_price"],
         "distance_m": round(claim["distance_m"]),
     }
 
@@ -80,8 +88,14 @@ async def confirm_claim(
         telegram.send_photo,
         done["donor_chat_id"],
         data,
-        f"✅ *Picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
-        f"is now with *{md(done['recipient_name'])}*.\n\n{impact}Salamat for sharing! 💚",
+        (
+            f"✅ *Sold and picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
+            f"went to *{md(done['recipient_name'])}* for ₱{float(done['reserved_price']):g}.\n\n"
+            f"{impact}Salamat for not letting it go to waste! 💚"
+            if done["reserved_price"] is not None
+            else f"✅ *Picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
+            f"is now with *{md(done['recipient_name'])}*.\n\n{impact}Salamat for sharing! 💚"
+        ),
     )
     return {
         "id": done["id"],
