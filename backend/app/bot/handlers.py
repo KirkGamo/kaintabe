@@ -289,8 +289,8 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
         return END
 
-    tg_file = await context.bot.get_file(msg.photo[-1].file_id)  # largest size
-    context.user_data["photo"] = bytes(await tg_file.download_as_bytearray())
+    # Keep only Telegram's file id (JSON-safe, survives restarts); download the bytes when needed
+    context.user_data["photo_file_id"] = msg.photo[-1].file_id  # largest size
     context.user_data["caption"] = (msg.caption or "").strip()
     context.user_data["donor"] = donor
 
@@ -318,7 +318,7 @@ async def chose_photo_purpose(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def confirm_individual_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     pending = context.user_data.pop("pending_pickup")
-    photo = context.user_data.pop("photo")
+    photo = await download_photo(context, context.user_data.pop("photo_file_id"))
     for key in ("caption", "donor"):
         context.user_data.pop(key, None)
     photo_url = await storage.upload_photo("pickup-photos", photo)
@@ -335,15 +335,21 @@ async def confirm_individual_pickup(update: Update, context: ContextTypes.DEFAUL
     return END
 
 
+async def download_photo(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> bytes:
+    tg_file = await context.bot.get_file(file_id)
+    return bytes(await tg_file.download_as_bytearray())
+
+
 async def start_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
-    context.user_data["draft"] = {"photo": context.user_data.pop("photo")}
+    context.user_data["draft"] = {"photo_file_id": context.user_data.pop("photo_file_id")}
     caption = context.user_data.pop("caption", "")
 
     listing = None
     if ai_intake.enabled():
         await msg.reply_text("🔍 Looking at your photo…")
-        listing = await ai_intake.parse_food_photo(context.user_data["draft"]["photo"], caption or None)
+        photo = await download_photo(context, context.user_data["draft"]["photo_file_id"])
+        listing = await ai_intake.parse_food_photo(photo, caption or None)
     if listing and listing.is_food:
         context.user_data["draft"]["ai"] = listing.model_dump()
         await msg.reply_text(
@@ -570,7 +576,7 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     await msg.reply_text("⏳ Posting your listing…")
 
-    photo_url = await storage.upload_photo("donation-photos", draft["photo"])
+    photo_url = await storage.upload_photo("donation-photos", await download_photo(context, draft["photo_file_id"]))
 
     donation = await asyncio.to_thread(
         repo.create_donation,
@@ -689,15 +695,19 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---------------------------------------------------------------------------
 
-def build_application(token: str, request=None) -> Application:
-    """`request` lets tests swap in a fake Telegram HTTP layer."""
+def build_application(token: str, request=None, persistence=None) -> Application:
+    """`request` lets tests swap in a fake Telegram HTTP layer.
+    `persistence` (e.g. DbPersistence) keeps conversations and drafts across restarts."""
     builder = Application.builder().token(token)
     if request is not None:
         builder = builder.request(request).get_updates_request(request)
     else:
         # PTB's 5 s defaults time out on slow venue/mobile wifi; give replies room to get through
         builder = builder.connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
+    if persistence is not None:
+        builder = builder.persistence(persistence)
     app = builder.build()
+    persistent = persistence is not None
     text = filters.TEXT & ~filters.COMMAND
     fallbacks = [CommandHandler("cancel", cancel)]
 
@@ -721,6 +731,7 @@ def build_application(token: str, request=None) -> Application:
         fallbacks=fallbacks,
         allow_reentry=True,
         name="onboarding",
+        persistent=persistent,
     )
 
     posting = ConversationHandler(
@@ -741,6 +752,7 @@ def build_application(token: str, request=None) -> Application:
         fallbacks=fallbacks,
         allow_reentry=True,  # a new photo restarts the draft
         name="posting",
+        persistent=persistent,
     )
 
     app.add_handler(onboarding)
