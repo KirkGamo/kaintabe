@@ -1,4 +1,5 @@
 import { directionsUrl, formatDistance } from '../lib/geo'
+import ConfirmPickup from './ConfirmPickup'
 import { formatLeft, reachState, timeLeft, urgency, URGENCY_COLORS } from '../lib/urgency'
 
 function ReachBadge({ donation: d, config, now }) {
@@ -19,7 +20,7 @@ function ReachBadge({ donation: d, config, now }) {
  * mode: 'open'  — in range of the viewer, claimable
  *       'mine'  — claimed by the viewer, awaiting pickup
  */
-export default function DonationCard({ donation: d, mode, distance, now, config, selected, onSelect, onClaim, busy }) {
+export default function DonationCard({ donation: d, mode, distance, now, config, selected, onSelect, onClaim, onConfirm, busy }) {
   const { leftMs, fraction } = timeLeft(d, now)
   const mine = mode === 'mine'
   const badge = mine ? 'bg-indigo-100 text-indigo-700' : URGENCY_COLORS[urgency(fraction)].badge
@@ -94,6 +95,7 @@ export default function DonationCard({ donation: d, mode, distance, now, config,
           </a>
         </div>
       )}
+      {mine && <ConfirmPickup onConfirm={(file) => onConfirm(d, file)} />}
     </div>
   )
 }

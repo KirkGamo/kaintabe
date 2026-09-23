@@ -94,3 +94,31 @@ def claim_donation(donation_id: str, recipient_id: str) -> dict:
             (recipient_id, donation_id),
         ).fetchone()
         return {**claim, **details}
+
+
+def get_claim(claim_id: str) -> dict | None:
+    with db.connect() as conn:
+        return conn.execute("select * from claims where id = %s", (claim_id,)).fetchone()
+
+
+def confirm_pickup(claim_id: str, photo_url: str) -> dict:
+    """Mark the claim confirmed and the listing completed/sold; returns what the thank-you needs."""
+    with db.connect() as conn:
+        try:
+            claim = conn.execute("select * from confirm_pickup(%s, %s)", (claim_id, photo_url)).fetchone()
+        except psycopg.errors.RaiseException as e:
+            if "not_confirmable" in str(e):
+                raise NotAvailable from e
+            raise
+        details = conn.execute(
+            """
+            select d.food_type, d.quantity, d.est_kg, d.status,
+                   o.telegram_chat_id as donor_chat_id, r.name as recipient_name
+              from donations d
+              join donors o on o.id = d.donor_id
+              join recipients r on r.id = %s
+             where d.id = %s
+            """,
+            (claim["recipient_id"], claim["donation_id"]),
+        ).fetchone()
+        return {**claim, **details}
