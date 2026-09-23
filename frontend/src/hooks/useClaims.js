@@ -26,7 +26,7 @@ export function useClaims() {
 
     supabase
       .from('claims')
-      .select('id, donation_id, recipient_id, claimed_at, confirmed_at, confirmation_photo_url')
+      .select('id, donation_id, recipient_id, claimed_at, confirmed_at, confirmation_photo_url, reserved_price')
       .then(({ data, error }) => {
         if (cancelled) return
         if (error) console.error('load claims failed', error)

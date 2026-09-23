@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
-const DEFAULTS = { radius_start_m: 2000, radius_max_m: 8000, widen_after_minutes: 10 }
+const DEFAULTS = { radius_start_m: 2000, radius_max_m: 8000, widen_after_minutes: 10, sale_window_minutes: 60 }
 
 /** Tunables from app_config (re-read every 30 s so demo-mode switches show up without a reload). */
 export function useConfig() {

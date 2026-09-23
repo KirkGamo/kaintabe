@@ -89,7 +89,11 @@ export default function App() {
       const claim = await claimDonation(d.id, viewer.id)
       addClaim(claim)
       setSelectedId(d.id)
-      setToast({ kind: 'ok', text: `Claimed ${d.food_type}! The donor has been notified.` })
+      const text =
+        claim.reserved_price != null
+          ? `Reserved ${d.food_type} for ₱${Number(claim.reserved_price)}. Pay the donor at pickup.`
+          : `Claimed ${d.food_type}! The donor has been notified.`
+      setToast({ kind: 'ok', text })
     } catch (e) {
       setToast({ kind: 'error', text: e.message })
     } finally {
@@ -118,6 +122,7 @@ export default function App() {
       distance={distance}
       now={now}
       config={config}
+      claim={claimsByDonation[d.id]}
       selected={d.id === selectedId}
       onSelect={(x) => setSelectedId(x.id)}
       onClaim={handleClaim}

@@ -5,6 +5,7 @@ conversations with mock updates without talking to Telegram.
 """
 import asyncio
 import logging
+import re
 import warnings
 
 from telegram import (
@@ -26,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from app.services import repo, storage
+from app.services import ai_intake, repo, storage
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 # Onboarding states
 ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE = range(5)
 # Posting states
-FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY = range(10, 17)
+FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE = range(10, 20)
 
 END = ConversationHandler.END
 
@@ -122,6 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def ask_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("editing", None)  # a fresh onboarding, not a profile edit
     await update.effective_message.reply_text(
         "🍱 *KainTabe — food rescue*\n\n"
         "Surplus food gets matched to nearby community kitchens before it spoils.\n\n"
@@ -150,11 +152,37 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return NAME
 
 
+async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/profile: walk the same steps, but show current values with Keep buttons and skip the pledge."""
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    if not donor:
+        return await ask_role(update, context)
+    context.user_data["editing"] = donor
+    await update.effective_message.reply_text(
+        "✏️ *Update your profile*\n\n"
+        f"Name: {md(donor['name'])}\n"
+        f"Type: {donor['type'].capitalize()}\n\n"
+        "What name should recipients see? Type a new one or keep it:",
+        parse_mode="Markdown",
+        reply_markup=buttons([[(f"Keep \"{donor['name'][:40]}\"", "keep:name")]]),
+    )
+    return NAME
+
+
 async def got_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["profile"] = {"name": update.effective_message.text.strip()[:80]}
+    editing = context.user_data.get("editing")
+    if update.callback_query:  # Keep current name
+        name = editing["name"]
+        await answer_choice(update, "Kept")
+    else:
+        name = update.effective_message.text.strip()[:80]
+    context.user_data["profile"] = {"name": name}
+    current = editing["type"] if editing else None
+    label = lambda t, text: f"{text} (current)" if t == current else text  # noqa: E731
     await update.effective_message.reply_text(
         "Are you a business or a household?",
-        reply_markup=buttons([[("🏪 Business", "type:business"), ("🏠 Household", "type:household")]]),
+        reply_markup=buttons([[(label("business", "🏪 Business"), "type:business"),
+                               (label("household", "🏠 Household"), "type:household")]]),
     )
     return DONOR_TYPE
 
@@ -166,13 +194,33 @@ async def chose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ask_location(
         update, "Where is your usual pickup spot? (You can use a different spot for each donation later.)"
     )
+    if context.user_data.get("editing"):
+        await update.effective_message.reply_text(
+            "…or keep the one you have:", reply_markup=buttons([[("📍 Keep my saved pickup spot", "keep:loc")]])
+        )
     return LOCATION
 
 
 async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    loc = update.effective_message.location
-    context.user_data["profile"].update(lat=loc.latitude, lng=loc.longitude)
+    editing = context.user_data.get("editing")
+    if update.callback_query:  # Keep saved spot (profile edit only)
+        await answer_choice(update, "Kept")
+        context.user_data["profile"].update(lat=editing["lat"], lng=editing["lng"])
+    else:
+        loc = update.effective_message.location
+        context.user_data["profile"].update(lat=loc.latitude, lng=loc.longitude)
     await update.effective_message.reply_text("📍 Got it.", reply_markup=ReplyKeyboardRemove())
+
+    if editing:  # already pledged: save straight away
+        p = context.user_data.pop("profile")
+        context.user_data.pop("editing")
+        await asyncio.to_thread(repo.create_donor, update.effective_chat.id, p["name"], p["type"], p["lat"], p["lng"])
+        await update.effective_message.reply_text(
+            f"✅ *Profile updated:* {md(p['name'])} · {p['type'].capitalize()}\n\nSend a photo whenever you have food to share.",
+            parse_mode="Markdown",
+        )
+        return END
+
     await update.effective_message.reply_text(
         PLEDGE_TEXT, parse_mode="Markdown", reply_markup=buttons([[("✅ I pledge", "pledge:yes")]])
     )
@@ -210,16 +258,69 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
         return END
 
-    context.user_data["draft"] = {"photo_file_id": msg.photo[-1].file_id}  # largest size
+    tg_file = await context.bot.get_file(msg.photo[-1].file_id)  # largest size
+    context.user_data["draft"] = {"photo": bytes(await tg_file.download_as_bytearray())}
     context.user_data["donor"] = donor
-
     caption = (msg.caption or "").strip()
+
+    listing = None
+    if ai_intake.enabled():
+        await msg.reply_text("🔍 Looking at your photo…")
+        listing = await ai_intake.parse_food_photo(context.user_data["draft"]["photo"], caption or None)
+    if listing and listing.is_food:
+        context.user_data["draft"]["ai"] = listing.model_dump()
+        await msg.reply_text(
+            ai_summary(listing),
+            parse_mode="Markdown",
+            reply_markup=buttons([[("✅ Looks right", "ai:ok"), ("✏️ Fix details", "ai:edit")]]),
+        )
+        return AI_CONFIRM
+    if listing and not listing.is_food:
+        await msg.reply_text("🤔 That doesn't look like food to me. If it is, let's add the details by hand.")
+    return await ask_manual(update, context, caption)
+
+
+def ai_summary(listing: "ai_intake.FoodListing") -> str:
+    lines = [
+        "🤖 *Here's what I see:*",
+        f"🍱 {md(listing.food_type)}",
+        f"📦 {md(listing.quantity)} (~{listing.est_kg:g} kg)",
+        f"⏱ Good for about {listing.good_for_hours} hrs",
+    ]
+    if listing.allergens:
+        lines.append(f"⚠️ May contain: {md(', '.join(listing.allergens))}")
+    lines.append("")
+    lines.append("Is this right?" if listing.confidence != "low" else "I'm not fully sure, so please check. Is this right?")
+    return "\n".join(lines)
+
+
+async def chose_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    draft = context.user_data["draft"]
+    ai = draft.pop("ai")
+    if update.callback_query.data == "ai:edit":
+        await answer_choice(update, "Fix details")
+        return await ask_manual(update, context, caption="")
+    await answer_choice(update, "Looks right")
+    draft.update(
+        food_type=ai["food_type"],
+        quantity=ai["quantity"],
+        est_kg=ai["est_kg"],
+        good_for_hours=ai["good_for_hours"],
+        allergens=ai["allergens"],
+        suggested_price=ai["suggested_price_php"],
+        ai_assisted=True,
+    )
+    return await after_details(update, context)
+
+
+async def ask_manual(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str) -> int:
+    msg = update.effective_message
     if caption:
         context.user_data["draft"]["food_type"] = caption[:120]
         await msg.reply_text(f"📸 Thanks! Food: *{md(caption[:120])}*", parse_mode="Markdown")
         return await ask_quantity(update, context)
 
-    await msg.reply_text("📸 Thanks! What food is it? (e.g. \"Pandesal\", \"Chicken adobo with rice\")")
+    await msg.reply_text("What food is it? (e.g. \"Pandesal\", \"Chicken adobo with rice\")")
     return FOOD
 
 
@@ -260,6 +361,66 @@ async def chose_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     hours = int(update.callback_query.data.split(":")[1])
     context.user_data["draft"]["good_for_hours"] = hours
     await answer_choice(update, f"{hours} hrs")
+    return await after_details(update, context)
+
+
+async def after_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Businesses may sell at a discount; households go straight to pickup (free donation)."""
+    if context.user_data["donor"]["type"] != "business":
+        return await ask_pickup(update, context)
+    await update.effective_message.reply_text(
+        "How do you want to share it?",
+        reply_markup=buttons([[("🎁 Donate free", "lt:donation"), ("🏷️ Sell at a discount", "lt:sale")]]),
+    )
+    return LISTING_TYPE
+
+
+async def chose_listing_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query.data == "lt:donation":
+        await answer_choice(update, "Donate free")
+        return await ask_pickup(update, context)
+    await answer_choice(update, "Sell at a discount")
+    minutes = await asyncio.to_thread(repo.sale_window_minutes)
+    text = (
+        "🏷️ What's your discounted price for the whole lot, in pesos?\n"
+        "Buyers reserve it here and pay you in person at pickup (cash or GCash).\n\n"
+        f"The price drops over the next {minutes:g} min. If it's still unsold then, it becomes a free donation "
+        "so nothing goes to waste."
+    )
+    suggested = context.user_data["draft"].get("suggested_price")
+    if suggested:
+        await update.effective_message.reply_text(
+            f"{text}\n\nTap the suggestion or type your own price:",
+            reply_markup=buttons([[(f"₱{suggested:g} (suggested)", f"price:{suggested:g}")]]),
+        )
+    else:
+        await update.effective_message.reply_text(f"{text}\n\nType a price, e.g. 120")
+    return PRICE
+
+
+def parse_price(text: str) -> float | None:
+    """'₱1,200', 'P85.50', '120 pesos' -> whole pesos; None if missing or out of range."""
+    m = re.search(r"\d+(?:\.\d+)?", text.replace(",", ""))
+    if not m:
+        return None
+    price = round(float(m.group()))
+    return price if 1 <= price <= 100_000 else None
+
+
+async def got_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    if update.callback_query:
+        price = float(update.callback_query.data.split(":")[1])
+        await answer_choice(update, f"₱{price:g}")
+    else:
+        price = parse_price(update.effective_message.text)
+        if price is None:
+            await update.effective_message.reply_text("Please type the price as a number of pesos, e.g. 120")
+            return None
+    context.user_data["draft"].update(listing_type="sale", price=price)
+    return await ask_pickup(update, context)
+
+
+async def ask_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
         "📍 Where can it be picked up?",
         reply_markup=buttons([[("My saved location", "loc:saved")], [("A different spot", "loc:new")]]),
@@ -332,9 +493,7 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     await msg.reply_text("⏳ Posting your listing…")
 
-    tg_file = await context.bot.get_file(draft["photo_file_id"])
-    photo = bytes(await tg_file.download_as_bytearray())
-    photo_url = await storage.upload_photo("donation-photos", photo)
+    photo_url = await storage.upload_photo("donation-photos", draft["photo"])
 
     donation = await asyncio.to_thread(
         repo.create_donation,
@@ -347,13 +506,28 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lng=draft["lng"],
         good_for_hours=draft["good_for_hours"],
         safety_checklist=draft.get("safety_checklist"),
+        allergens=draft.get("allergens"),
+        ai_assisted=draft.get("ai_assisted", False),
+        suggested_price=draft.get("suggested_price"),
+        listing_type=draft.get("listing_type", "donation"),
+        price=draft.get("price"),
     )
     radius_km = donation["search_radius_m"] / 1000
+    if donation["listing_type"] == "sale":
+        details = (
+            f"🏷️ For sale at ₱{draft['price']:g}. Buyers within {radius_km:g} km can reserve it and pay you at pickup. "
+            "If it's still unsold when the price timer ends, it becomes a free donation.\n"
+            "I'll message you as soon as it's reserved."
+        )
+    else:
+        details = (
+            f"Nearby community kitchens within {radius_km:g} km can see it. "
+            "If no one claims it soon, I'll widen the search automatically.\n"
+            "I'll message you as soon as it's claimed."
+        )
     await msg.reply_text(
         f"✅ *Live now!* {md(draft['food_type'])} ({md(draft['quantity'])})\n\n"
-        f"Nearby community kitchens within {radius_km:g} km can see it. "
-        f"If no one claims it soon, I'll widen the search automatically.\n"
-        f"I'll message you as soon as it's claimed. ⏱ Good for {draft['good_for_hours']} hrs.",
+        f"{details} ⏱ Good for {draft['good_for_hours']} hrs.",
         parse_mode="Markdown",
     )
     return END
@@ -370,23 +544,35 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("bot handler failed", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text("😕 Something went wrong on our side. Please try again.")
+        await update.effective_message.reply_text(
+            "😕 Something went wrong on our side (probably a connection hiccup).\n\n"
+            "If you were posting food, just send the photo again to start over. "
+            "Otherwise, send /start."
+        )
 
 
 # ---------------------------------------------------------------------------
 
-def build_application(token: str) -> Application:
-    app = Application.builder().token(token).build()
+def build_application(token: str, request=None) -> Application:
+    """`request` lets tests swap in a fake Telegram HTTP layer."""
+    builder = Application.builder().token(token)
+    if request is not None:
+        builder = builder.request(request).get_updates_request(request)
+    app = builder.build()
     text = filters.TEXT & ~filters.COMMAND
     fallbacks = [CommandHandler("cancel", cancel)]
 
     onboarding = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CommandHandler("profile", ask_role)],
+        entry_points=[CommandHandler("start", start), CommandHandler("profile", edit_profile)],
         states={
             ROLE: [CallbackQueryHandler(chose_role, pattern=r"^role:")],
-            NAME: [MessageHandler(text, got_name)],
+            NAME: [MessageHandler(text, got_name), CallbackQueryHandler(got_name, pattern=r"^keep:name$")],
             DONOR_TYPE: [CallbackQueryHandler(chose_type, pattern=r"^type:")],
-            LOCATION: [MessageHandler(filters.LOCATION, got_location), MessageHandler(text, location_expected)],
+            LOCATION: [
+                MessageHandler(filters.LOCATION, got_location),
+                CallbackQueryHandler(got_location, pattern=r"^keep:loc$"),
+                MessageHandler(text, location_expected),
+            ],
             PLEDGE: [CallbackQueryHandler(pledged, pattern=r"^pledge:")],
         },
         fallbacks=fallbacks,
@@ -397,6 +583,9 @@ def build_application(token: str) -> Application:
     posting = ConversationHandler(
         entry_points=[MessageHandler(filters.PHOTO, got_photo)],
         states={
+            AI_CONFIRM: [CallbackQueryHandler(chose_ai, pattern=r"^ai:")],
+            LISTING_TYPE: [CallbackQueryHandler(chose_listing_type, pattern=r"^lt:")],
+            PRICE: [CallbackQueryHandler(got_price, pattern=r"^price:"), MessageHandler(text, got_price)],
             FOOD: [MessageHandler(text, got_food)],
             QUANTITY: [MessageHandler(text, got_quantity)],
             WEIGHT: [CallbackQueryHandler(chose_weight, pattern=r"^kg:")],

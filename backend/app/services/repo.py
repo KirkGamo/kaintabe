@@ -40,15 +40,24 @@ def create_donation(
     lng: float,
     good_for_hours: float,
     safety_checklist: dict | None = None,
+    allergens: list[str] | None = None,
+    ai_assisted: bool = False,
+    suggested_price: float | None = None,
+    listing_type: str = "donation",
+    price: float | None = None,
 ) -> dict:
     with db.connect() as conn:
         return conn.execute(
             """
             insert into donations (donor_id, donor_name, photo_url, food_type, quantity, est_kg,
-                                   lat, lng, safety_checklist, expires_at, search_radius_m)
+                                   lat, lng, safety_checklist, expires_at, search_radius_m,
+                                   allergens, ai_assisted, suggested_price,
+                                   listing_type, original_price, current_price)
             values (%(donor_id)s, %(donor_name)s, %(photo_url)s, %(food_type)s, %(quantity)s, %(est_kg)s,
                     %(lat)s, %(lng)s, %(safety)s, now() + make_interval(mins => %(minutes)s),
-                    (select value::int from app_config where key = 'radius_start_m'))
+                    (select value::int from app_config where key = 'radius_start_m'),
+                    %(allergens)s, %(ai_assisted)s, %(suggested_price)s,
+                    %(listing_type)s, %(price)s, %(price)s)
             returning *
             """,
             {
@@ -62,8 +71,19 @@ def create_donation(
                 "lng": lng,
                 "safety": db.Json(safety_checklist) if safety_checklist is not None else None,
                 "minutes": int(good_for_hours * 60),
+                "allergens": allergens,
+                "ai_assisted": ai_assisted,
+                "suggested_price": suggested_price,
+                "listing_type": listing_type,
+                "price": price if listing_type == "sale" else None,
             },
         ).fetchone()
+
+
+def sale_window_minutes() -> float:
+    """How long a sale's price takes to fall before it becomes a free donation."""
+    with db.connect() as conn:
+        return float(conn.execute("select value from app_config where key = 'sale_window_minutes'").fetchone()["value"])
 
 
 def claim_donation(donation_id: str, recipient_id: str) -> dict:
@@ -82,7 +102,7 @@ def claim_donation(donation_id: str, recipient_id: str) -> dict:
             raise
         details = conn.execute(
             """
-            select d.food_type, d.quantity, d.lat, d.lng,
+            select d.food_type, d.quantity, d.lat, d.lng, d.listing_type,
                    o.telegram_chat_id as donor_chat_id,
                    r.name as recipient_name, r.hours as recipient_hours,
                    st_distance(d.location, r.location) as distance_m
@@ -112,7 +132,7 @@ def confirm_pickup(claim_id: str, photo_url: str) -> dict:
             raise
         details = conn.execute(
             """
-            select d.food_type, d.quantity, d.est_kg, d.status,
+            select d.food_type, d.quantity, d.est_kg, d.status, d.listing_type,
                    o.telegram_chat_id as donor_chat_id, r.name as recipient_name
               from donations d
               join donors o on o.id = d.donor_id

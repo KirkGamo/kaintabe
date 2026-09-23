@@ -9,7 +9,8 @@ from app.config import settings
 async def upload_photo(bucket: str, data: bytes, content_type: str = "image/jpeg") -> str:
     """Upload bytes under a random name and return the public URL."""
     path = f"{uuid.uuid4()}.jpg"
-    async with httpx.AsyncClient(timeout=30) as client:
+    # retries=3: re-attempt failed connections (DNS/network blips); safe because the path is unique
+    async with httpx.AsyncClient(timeout=30, transport=httpx.AsyncHTTPTransport(retries=3)) as client:
         res = await client.post(
             f"{settings.supabase_url}/storage/v1/object/{bucket}/{path}",
             content=data,

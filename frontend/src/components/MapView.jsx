@@ -77,7 +77,7 @@ export default function MapView({ items, recipients, viewer, selected, onSelect,
             )}
             <Marker
               position={[d.lat, d.lng]}
-              icon={pinIcon({ color, emoji: mine ? '✔️' : '🍱', ring: isSelected, faded: out })}
+              icon={pinIcon({ color, emoji: mine ? '✔️' : d.listing_type === 'sale' ? '🏷️' : '🍱', ring: isSelected, faded: out })}
               zIndexOffset={isSelected ? 1000 : out ? -50 : 0}
               eventHandlers={{ click: () => onSelect(d) }}
             >

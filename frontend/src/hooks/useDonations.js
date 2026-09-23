@@ -5,7 +5,7 @@ export const ACTIVE_STATUSES = ['posted', 'escalated', 'claimed']
 
 const COLUMNS =
   'id, donor_name, photo_url, food_type, quantity, est_kg, lat, lng, listing_type, current_price, ' +
-  'expires_at, search_radius_m, radius_widened_at, status, created_at, safety_checklist'
+  'expires_at, search_radius_m, radius_widened_at, status, created_at, safety_checklist, original_price, allergens, ai_assisted'
 
 /**
  * Active listings kept in sync via Supabase Realtime.
