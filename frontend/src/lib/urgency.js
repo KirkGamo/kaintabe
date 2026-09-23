@@ -21,6 +21,17 @@ export const URGENCY_COLORS = {
   urgent: { hex: '#dc2626', badge: 'bg-red-100 text-red-700' },
 }
 
+/**
+ * Where a listing is in the auto-widen cycle (mirrors widen_unclaimed() in SQL):
+ *  { phase: 'widening' | 'escalating' | 'escalated', msUntilNext }
+ */
+export function reachState(d, config, now) {
+  if (d.status === 'escalated') return { phase: 'escalated', msUntilNext: 0 }
+  const next = new Date(d.radius_widened_at).getTime() + config.widen_after_minutes * 60000
+  const phase = d.search_radius_m >= config.radius_max_m ? 'escalating' : 'widening'
+  return { phase, msUntilNext: Math.max(0, next - now) }
+}
+
 export function formatLeft(ms) {
   if (ms <= 0) return 'expired'
   const s = Math.floor(ms / 1000)

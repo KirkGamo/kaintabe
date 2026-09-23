@@ -1,11 +1,25 @@
 import { directionsUrl, formatDistance } from '../lib/geo'
-import { formatLeft, timeLeft, urgency, URGENCY_COLORS } from '../lib/urgency'
+import { formatLeft, reachState, timeLeft, urgency, URGENCY_COLORS } from '../lib/urgency'
+
+function ReachBadge({ donation: d, config, now }) {
+  const km = d.search_radius_m / 1000
+  const { phase, msUntilNext } = reachState(d, config, now)
+  if (phase === 'escalated') {
+    return <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold">🚨 Urgent: no takers yet · {km} km</span>
+  }
+  const next = msUntilNext > 0 ? formatLeft(msUntilNext) : 'now'
+  return (
+    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 tabular-nums">
+      📡 {km} km reach · {phase === 'widening' ? `widens in ${next}` : `max reach, escalates in ${next}`}
+    </span>
+  )
+}
 
 /**
  * mode: 'open'  — in range of the viewer, claimable
  *       'mine'  — claimed by the viewer, awaiting pickup
  */
-export default function DonationCard({ donation: d, mode, distance, now, selected, onSelect, onClaim, busy }) {
+export default function DonationCard({ donation: d, mode, distance, now, config, selected, onSelect, onClaim, busy }) {
   const { leftMs, fraction } = timeLeft(d, now)
   const mine = mode === 'mine'
   const badge = mine ? 'bg-indigo-100 text-indigo-700' : URGENCY_COLORS[urgency(fraction)].badge
@@ -44,9 +58,7 @@ export default function DonationCard({ donation: d, mode, distance, now, selecte
           </p>
           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
             {safetyChecked && <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">✅ Safety checked</span>}
-            {!mine && (
-              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">📡 {d.search_radius_m / 1000} km reach</span>
-            )}
+            {!mine && <ReachBadge donation={d} config={config} now={now} />}
           </div>
         </div>
       </div>
