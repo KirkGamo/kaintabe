@@ -667,18 +667,24 @@ def my_listings_view(listings: list[dict]) -> tuple[str, InlineKeyboardMarkup | 
     """The /mylistings message: one line per listing, a 'Mark as gone' button per unclaimed one."""
     if not listings:
         return "You have no live listings right now. Send a photo whenever you have food to share 📸", None
-    lines, rows = ["📋 *Your live listings*", ""], []
-    for i, d in enumerate(listings, start=1):
-        item = f"{i}. {md(d['food_type'])} ({md(d['quantity'])})"
-        if d["status"] == "claimed":
-            lines.append(f"{item}\n   ✔️ Claimed by *{md(d['claimer_name'] or 'someone')}*, they're coming")
-            continue
-        state = "🚨 no takers yet" if d["status"] == "escalated" else "📡 open"
-        if d["listing_type"] == "sale" and d["current_price"] is not None:
-            state += f" · 🏷️ ₱{float(d['current_price']):g}"
-        lines.append(f"{item}\n   {state} · ⏱ {_time_left(d['expires_at'])} left")
-        rows.append([InlineKeyboardButton(f"✅ {i}. Mark as gone", callback_data=f"gone:{d['id']}")])
-    lines += ["", "Food already given away or eaten? Tap *Mark as gone* so no one makes a wasted trip."] if rows else []
+    waiting = [d for d in listings if d["status"] != "claimed"]
+    claimed = [d for d in listings if d["status"] == "claimed"]
+    lines, rows = ["📋 *Your live listings*"], []
+    if waiting:
+        lines += ["", "*Waiting for a taker*"]
+        for d in waiting:
+            state = "🚨 no takers yet" if d["status"] == "escalated" else "📡 open"
+            if d["listing_type"] == "sale" and d["current_price"] is not None:
+                state += f" · 🏷️ ₱{float(d['current_price']):g}"
+            lines.append(f"• {md(d['food_type'])} ({md(d['quantity'])})\n   {state} · ⏱ {_time_left(d['expires_at'])} left")
+            # the button names the food, so it's clear which listing it removes
+            rows.append([InlineKeyboardButton(f"🗑️ Take down: {d['food_type'][:28]}", callback_data=f"gone:{d['id']}")])
+    if claimed:
+        lines += ["", "*Being picked up* (can't be taken down)"]
+        for d in claimed:
+            lines.append(f"• {md(d['food_type'])} ({md(d['quantity'])})\n   ✔️ by *{md(d['claimer_name'] or 'someone')}*, they're coming")
+    if rows:
+        lines += ["", "Already given away or eaten? Tap *Take down* below so no one makes a wasted trip."]
     return "\n".join(lines), InlineKeyboardMarkup(rows) if rows else None
 
 

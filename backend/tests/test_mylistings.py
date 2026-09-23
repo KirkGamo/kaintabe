@@ -90,9 +90,12 @@ def test_lists_open_sale_and_claimed_with_buttons_only_for_unclaimed():
     out = sent(run(msg("/mylistings")), "sendMessage")[0]
     text, keyboard = out["text"], out["reply_markup"]
     assert "Pandesal" in text and "Ensaymada" in text and "₱80" in text
-    assert "Claimed by *Bayanihan Pantry Jaro*" in text
-    buttons = [b["callback_data"] for row in keyboard["inline_keyboard"] for b in row]
-    assert len(buttons) == 2 and f"gone:{open_id}" in buttons and f"gone:{claimed_id}" not in buttons
+    assert "Being picked up" in text and "by *Bayanihan Pantry Jaro*" in text
+    buttons = [b for row in keyboard["inline_keyboard"] for b in row]
+    data = [b["callback_data"] for b in buttons]
+    assert len(data) == 2 and f"gone:{open_id}" in data and f"gone:{claimed_id}" not in data
+    # each button names the food it removes (no guessing which number is which)
+    assert {b["text"] for b in buttons} == {"🗑️ Take down: Pandesal", "🗑️ Take down: Ensaymada"}
 
 
 def test_mark_as_gone_withdraws_and_refreshes_list():
