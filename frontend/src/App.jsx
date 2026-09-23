@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import DonationCard from './components/DonationCard'
 import MapView from './components/MapView'
 import { useClaims } from './hooks/useClaims'
+import { useConfig } from './hooks/useConfig'
 import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
 import { claimDonation } from './lib/api'
@@ -49,6 +50,7 @@ export default function App() {
   const { donations, live } = useDonations()
   const { claimsByDonation, addClaim } = useClaims()
   const recipients = useRecipients()
+  const config = useConfig()
   const [viewerId, setViewerId] = useState(loadViewerId)
   const [selectedId, setSelectedId] = useState(null)
   const [busyId, setBusyId] = useState(null)
@@ -102,6 +104,7 @@ export default function App() {
       mode={mode}
       distance={distance}
       now={now}
+      config={config}
       selected={d.id === selectedId}
       onSelect={(x) => setSelectedId(x.id)}
       onClaim={handleClaim}
