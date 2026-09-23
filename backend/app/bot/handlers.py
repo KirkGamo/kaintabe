@@ -694,6 +694,9 @@ def build_application(token: str, request=None) -> Application:
     builder = Application.builder().token(token)
     if request is not None:
         builder = builder.request(request).get_updates_request(request)
+    else:
+        # PTB's 5 s defaults time out on slow venue/mobile wifi; give replies room to get through
+        builder = builder.connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
     app = builder.build()
     text = filters.TEXT & ~filters.COMMAND
     fallbacks = [CommandHandler("cancel", cancel)]
