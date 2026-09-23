@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -14,20 +15,36 @@ logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log bot-token URLs
 log = logging.getLogger(__name__)
 
 
+async def start_polling_bot(bot) -> None:
+    """Connect to Telegram, retrying with backoff; a flaky network must not block the API."""
+    delay = 2
+    while True:
+        try:
+            await bot.initialize()
+            break
+        except Exception as e:  # noqa: BLE001 - any failure here is a connectivity problem
+            log.warning("Telegram unreachable (%s); retrying in %ss", type(e).__name__, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30)
+    await bot.start()
+    await bot.updater.start_polling(drop_pending_updates=True)
+    log.info("Telegram bot @%s polling", bot.bot.username)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bot = None
+    bot = starter = None
     if settings.telegram_bot_token and settings.bot_mode == "polling":
         bot = build_application(settings.telegram_bot_token)
-        await bot.initialize()
-        await bot.start()
-        await bot.updater.start_polling(drop_pending_updates=True)
-        log.info("Telegram bot @%s polling", bot.bot.username)
+        starter = asyncio.create_task(start_polling_bot(bot))
     app.state.bot = bot
     yield
-    if bot:
+    if starter and not starter.done():
+        starter.cancel()
+    if bot and bot.running:
         await bot.updater.stop()
         await bot.stop()
+    if bot:
         await bot.shutdown()
 
 
