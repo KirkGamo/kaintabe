@@ -165,7 +165,9 @@ def test_post_with_caption_and_saved_location(upload):
     u = pass_safety(ctx)
     assert "Live now" in last_reply(u)
 
-    ctx.bot.get_file.assert_awaited_once_with("large")  # largest photo size
+    # always the largest size; fetched by file id when needed (AI read + publish), never held as bytes
+    assert {c.args[0] for c in ctx.bot.get_file.await_args_list} == {"large"}
+    assert "photo_file_id" not in ctx.user_data and "photo" not in ctx.user_data
     upload.assert_awaited_once()
 
     d = fetch_donation()

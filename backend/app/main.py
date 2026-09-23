@@ -9,6 +9,7 @@ from telegram import Update
 
 from app import db
 from app.bot.handlers import build_application
+from app.bot.persistence import DbPersistence
 from app.config import settings
 from app.routes import router
 from app.services import flash
@@ -59,7 +60,11 @@ async def lifespan(app: FastAPI):
         log.error("BOT_MODE=webhook needs PUBLIC_URL and WEBHOOK_SECRET; bot disabled")
         mode = "off"
     if settings.telegram_bot_token and mode in ("polling", "webhook"):
-        bot = build_application(settings.telegram_bot_token)
+        bot = build_application(
+            settings.telegram_bot_token,
+            # keyed by bot id (token prefix) so the dev and prod bots never share saved state
+            persistence=DbPersistence(bot_id=settings.telegram_bot_token.split(":", 1)[0]),
+        )
         starter = asyncio.create_task(run_bot(bot, mode))
     app.state.bot = bot
     yield
