@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import db
 from app.bot.handlers import build_application
 from app.config import settings
+from app.routes import router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log bot-token URLs
@@ -38,6 +39,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(router)
 
 
 @app.get("/health")

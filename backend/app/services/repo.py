@@ -1,5 +1,11 @@
 """Database access for the bot and API. Sync psycopg; call from async code via asyncio.to_thread."""
+import psycopg
+
 from app import db
+
+
+class NotAvailable(Exception):
+    """Listing was already claimed, expired, or is out of this recipient's range."""
 
 
 def get_donor_by_chat(chat_id: int) -> dict | None:
@@ -58,3 +64,33 @@ def create_donation(
                 "minutes": int(good_for_hours * 60),
             },
         ).fetchone()
+
+
+def claim_donation(donation_id: str, recipient_id: str) -> dict:
+    """Atomically claim a listing (PostGIS range + status checked in SQL).
+
+    Returns the claim joined with what the notifications need.
+    """
+    with db.connect() as conn:
+        try:
+            claim = conn.execute(
+                "select * from claim_donation(%s, %s)", (donation_id, recipient_id)
+            ).fetchone()
+        except psycopg.errors.RaiseException as e:
+            if "not_available" in str(e):
+                raise NotAvailable from e
+            raise
+        details = conn.execute(
+            """
+            select d.food_type, d.quantity, d.lat, d.lng,
+                   o.telegram_chat_id as donor_chat_id,
+                   r.name as recipient_name, r.hours as recipient_hours,
+                   st_distance(d.location, r.location) as distance_m
+              from donations d
+              join donors o on o.id = d.donor_id
+              join recipients r on r.id = %s
+             where d.id = %s
+            """,
+            (recipient_id, donation_id),
+        ).fetchone()
+        return {**claim, **details}
