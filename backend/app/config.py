@@ -18,3 +18,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+settings.supabase_url = settings.supabase_url.rstrip("/")
