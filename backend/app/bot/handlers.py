@@ -123,6 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def ask_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("editing", None)  # a fresh onboarding, not a profile edit
     await update.effective_message.reply_text(
         "🍱 *KainTabe — food rescue*\n\n"
         "Surplus food gets matched to nearby community kitchens before it spoils.\n\n"
@@ -151,11 +152,37 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return NAME
 
 
+async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/profile: walk the same steps, but show current values with Keep buttons and skip the pledge."""
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    if not donor:
+        return await ask_role(update, context)
+    context.user_data["editing"] = donor
+    await update.effective_message.reply_text(
+        "✏️ *Update your profile*\n\n"
+        f"Name: {md(donor['name'])}\n"
+        f"Type: {donor['type'].capitalize()}\n\n"
+        "What name should recipients see? Type a new one or keep it:",
+        parse_mode="Markdown",
+        reply_markup=buttons([[(f"Keep \"{donor['name'][:40]}\"", "keep:name")]]),
+    )
+    return NAME
+
+
 async def got_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["profile"] = {"name": update.effective_message.text.strip()[:80]}
+    editing = context.user_data.get("editing")
+    if update.callback_query:  # Keep current name
+        name = editing["name"]
+        await answer_choice(update, "Kept")
+    else:
+        name = update.effective_message.text.strip()[:80]
+    context.user_data["profile"] = {"name": name}
+    current = editing["type"] if editing else None
+    label = lambda t, text: f"{text} (current)" if t == current else text  # noqa: E731
     await update.effective_message.reply_text(
         "Are you a business or a household?",
-        reply_markup=buttons([[("🏪 Business", "type:business"), ("🏠 Household", "type:household")]]),
+        reply_markup=buttons([[(label("business", "🏪 Business"), "type:business"),
+                               (label("household", "🏠 Household"), "type:household")]]),
     )
     return DONOR_TYPE
 
@@ -167,13 +194,33 @@ async def chose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ask_location(
         update, "Where is your usual pickup spot? (You can use a different spot for each donation later.)"
     )
+    if context.user_data.get("editing"):
+        await update.effective_message.reply_text(
+            "…or keep the one you have:", reply_markup=buttons([[("📍 Keep my saved pickup spot", "keep:loc")]])
+        )
     return LOCATION
 
 
 async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    loc = update.effective_message.location
-    context.user_data["profile"].update(lat=loc.latitude, lng=loc.longitude)
+    editing = context.user_data.get("editing")
+    if update.callback_query:  # Keep saved spot (profile edit only)
+        await answer_choice(update, "Kept")
+        context.user_data["profile"].update(lat=editing["lat"], lng=editing["lng"])
+    else:
+        loc = update.effective_message.location
+        context.user_data["profile"].update(lat=loc.latitude, lng=loc.longitude)
     await update.effective_message.reply_text("📍 Got it.", reply_markup=ReplyKeyboardRemove())
+
+    if editing:  # already pledged: save straight away
+        p = context.user_data.pop("profile")
+        context.user_data.pop("editing")
+        await asyncio.to_thread(repo.create_donor, update.effective_chat.id, p["name"], p["type"], p["lat"], p["lng"])
+        await update.effective_message.reply_text(
+            f"✅ *Profile updated:* {md(p['name'])} · {p['type'].capitalize()}\n\nSend a photo whenever you have food to share.",
+            parse_mode="Markdown",
+        )
+        return END
+
     await update.effective_message.reply_text(
         PLEDGE_TEXT, parse_mode="Markdown", reply_markup=buttons([[("✅ I pledge", "pledge:yes")]])
     )
@@ -506,18 +553,26 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---------------------------------------------------------------------------
 
-def build_application(token: str) -> Application:
-    app = Application.builder().token(token).build()
+def build_application(token: str, request=None) -> Application:
+    """`request` lets tests swap in a fake Telegram HTTP layer."""
+    builder = Application.builder().token(token)
+    if request is not None:
+        builder = builder.request(request).get_updates_request(request)
+    app = builder.build()
     text = filters.TEXT & ~filters.COMMAND
     fallbacks = [CommandHandler("cancel", cancel)]
 
     onboarding = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CommandHandler("profile", ask_role)],
+        entry_points=[CommandHandler("start", start), CommandHandler("profile", edit_profile)],
         states={
             ROLE: [CallbackQueryHandler(chose_role, pattern=r"^role:")],
-            NAME: [MessageHandler(text, got_name)],
+            NAME: [MessageHandler(text, got_name), CallbackQueryHandler(got_name, pattern=r"^keep:name$")],
             DONOR_TYPE: [CallbackQueryHandler(chose_type, pattern=r"^type:")],
-            LOCATION: [MessageHandler(filters.LOCATION, got_location), MessageHandler(text, location_expected)],
+            LOCATION: [
+                MessageHandler(filters.LOCATION, got_location),
+                CallbackQueryHandler(got_location, pattern=r"^keep:loc$"),
+                MessageHandler(text, location_expected),
+            ],
             PLEDGE: [CallbackQueryHandler(pledged, pattern=r"^pledge:")],
         },
         fallbacks=fallbacks,
