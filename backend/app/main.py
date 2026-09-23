@@ -11,6 +11,7 @@ from app import db
 from app.bot.handlers import build_application
 from app.config import settings
 from app.routes import router
+from app.services import flash
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log bot-token URLs
@@ -44,6 +45,12 @@ async def start_bot(bot, mode: str) -> None:
         log.info("Telegram bot @%s polling", bot.bot.username)
 
 
+async def run_bot(bot, mode: str) -> None:
+    """Connect the bot, then keep sending flash offers until shutdown cancels this task."""
+    await start_bot(bot, mode)
+    await flash.run_forever(bot.bot)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot = starter = None
@@ -53,7 +60,7 @@ async def lifespan(app: FastAPI):
         mode = "off"
     if settings.telegram_bot_token and mode in ("polling", "webhook"):
         bot = build_application(settings.telegram_bot_token)
-        starter = asyncio.create_task(start_bot(bot, mode))
+        starter = asyncio.create_task(run_bot(bot, mode))
     app.state.bot = bot
     yield
     if starter and not starter.done():

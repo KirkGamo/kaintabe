@@ -16,7 +16,6 @@ from telegram import (
     ReplyKeyboardRemove,
     Update,
 )
-from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -27,7 +26,9 @@ from telegram.ext import (
     filters,
 )
 
-from app.services import ai_intake, repo, storage
+from app.services import ai_intake, notify, repo, storage
+from app.services import telegram as tg_out  # outgoing messages to other chats (e.g. the donor)
+from app.services.notify import md
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +36,9 @@ log = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 
 # Onboarding states
-ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE = range(5)
+ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE, IND_LOCATION = range(6)
 # Posting states
-FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE = range(10, 20)
+FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE, PHOTO_PURPOSE = range(10, 21)
 
 END = ConversationHandler.END
 
@@ -70,11 +71,6 @@ SAFETY_CHECKLIST = [
         "food with unknown contents, because recipients may have allergies",
     ),
 ]
-
-
-def md(text: str) -> str:
-    """Escape user-provided text for parse_mode="Markdown"."""
-    return escape_markdown(str(text), version=1)
 
 
 def buttons(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
@@ -112,13 +108,18 @@ async def answer_choice(update: Update, chosen_label: str) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
     if donor:
+        person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
+        on_list = bool(person and person["active"])
         await update.effective_message.reply_text(
             f"Welcome back, {md(donor['name'])}! 👋\n\n"
             "To share food, just *send a photo* of it here.\n"
-            "Send /profile to update your details.",
+            "Send /profile to update your details."
+            + ("\n\n💚 You're also on the flash-offer list (/stop to leave)." if on_list else ""),
             parse_mode="Markdown",
+            # donors can also receive flash offers; the button re-enters the recipient branch
+            reply_markup=None if on_list else buttons([[("🙋 Get free-food offers near me", "role:recipient")]]),
         )
-        return END
+        return END if on_list else ROLE
     return await ask_role(update, context)
 
 
@@ -138,12 +139,20 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     role = update.callback_query.data.split(":")[1]
     if role == "recipient":
         await answer_choice(update, "I need food")
+        person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
+        if person and person["active"]:
+            await update.effective_message.reply_text(
+                "💚 You're already on the list for flash offers near you. Send /stop to leave it."
+            )
+            return END
         await update.effective_message.reply_text(
-            "Thank you for reaching out 💚\n\n"
-            "Community kitchens and pantries are onboarded by our team. "
-            "Individual sign-up for last-minute food offers is coming soon."
+            "💚 *Flash offers*\n\n"
+            "When food near you is about to go to waste and no community kitchen can take it in time, "
+            "I'll message you. It's free, and the first person to tap gets it.",
+            parse_mode="Markdown",
         )
-        return END
+        await ask_location(update, "Where should offers be near? (Within about 3 km of this spot.)")
+        return IND_LOCATION
     await answer_choice(update, "I have food to share")
     await update.effective_message.reply_text(
         "Great! Let's set up your donor profile (takes 30 seconds).\n\n"
@@ -167,6 +176,24 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reply_markup=buttons([[(f"Keep \"{donor['name'][:40]}\"", "keep:name")]]),
     )
     return NAME
+
+
+async def got_individual_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    loc = update.effective_message.location
+    user = getattr(update, "effective_user", None)
+    name = (getattr(user, "first_name", None) or "Neighbor")[:40]
+    await asyncio.to_thread(
+        repo.upsert_individual, update.effective_chat.id, name, loc.latitude, loc.longitude, context.bot.username
+    )
+    await update.effective_message.reply_text("📍 Got it.", reply_markup=ReplyKeyboardRemove())
+    await update.effective_message.reply_text(
+        "✅ *You're on the list!*\n\n"
+        "I'll message you when there's free food within about 3 km that would otherwise go to waste. "
+        "Tap fast: it's first come, first served.\n\n"
+        "Send /stop anytime to stop the offers.",
+        parse_mode="Markdown",
+    )
+    return END
 
 
 async def got_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -252,16 +279,66 @@ async def pledged(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ---------------------------------------------------------------------------
 
 async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A photo is new food to share, or an individual confirming a flash-offer pickup."""
     msg = update.effective_message
-    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
-    if not donor:
+    chat_id = update.effective_chat.id
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, chat_id)
+    person = await asyncio.to_thread(repo.get_individual, chat_id, context.bot.username)
+    pending = await asyncio.to_thread(repo.pending_pickup, person["id"]) if person else None
+    if not donor and not pending:
         await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
         return END
 
     tg_file = await context.bot.get_file(msg.photo[-1].file_id)  # largest size
-    context.user_data["draft"] = {"photo": bytes(await tg_file.download_as_bytearray())}
+    context.user_data["photo"] = bytes(await tg_file.download_as_bytearray())
+    context.user_data["caption"] = (msg.caption or "").strip()
     context.user_data["donor"] = donor
-    caption = (msg.caption or "").strip()
+
+    if pending:
+        context.user_data["pending_pickup"] = pending
+        if not donor:
+            return await confirm_individual_pickup(update, context)
+        await msg.reply_text(
+            "Is this photo…",
+            reply_markup=buttons([[(f"✅ My pickup of {pending['food_type'][:30]}", "purpose:pickup")],
+                                  [("📸 New food to share", "purpose:share")]]),
+        )
+        return PHOTO_PURPOSE
+    return await start_listing(update, context)
+
+
+async def chose_photo_purpose(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query.data == "purpose:pickup":
+        await answer_choice(update, "Pickup confirmation")
+        return await confirm_individual_pickup(update, context)
+    await answer_choice(update, "New food to share")
+    context.user_data.pop("pending_pickup", None)
+    return await start_listing(update, context)
+
+
+async def confirm_individual_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    pending = context.user_data.pop("pending_pickup")
+    photo = context.user_data.pop("photo")
+    for key in ("caption", "donor"):
+        context.user_data.pop(key, None)
+    photo_url = await storage.upload_photo("pickup-photos", photo)
+    try:
+        done = await asyncio.to_thread(repo.confirm_pickup, str(pending["id"]), photo_url)
+    except repo.NotAvailable:
+        await update.effective_message.reply_text("This pickup was already confirmed. Salamat! 💚")
+        return END
+    await update.effective_message.reply_text(
+        f"🙏 Pickup confirmed. Enjoy the {md(done['food_type'])}, and salamat for making sure it didn't go to waste! 💚",
+        parse_mode="Markdown",
+    )
+    await tg_out.send_photo(done["donor_chat_id"], photo, notify.picked_up_text(done))
+    return END
+
+
+async def start_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.effective_message
+    context.user_data["draft"] = {"photo": context.user_data.pop("photo")}
+    caption = context.user_data.pop("caption", "")
 
     listing = None
     if ai_intake.enabled():
@@ -546,6 +623,41 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # half-finished post is forgotten. Whatever they tap or type next must still get an answer.
 # ---------------------------------------------------------------------------
 
+async def flash_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🙋 on a flash offer: first tap wins (same atomic claim as the web app)."""
+    query = update.callback_query
+    donation_id = query.data.split(":", 1)[1]
+    person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
+    if not person or not person["active"]:
+        await query.answer("Flash offers are for people on the list. Send /start and choose 'I need food'.", show_alert=True)
+        return
+    try:
+        claim = await asyncio.to_thread(repo.claim_donation, donation_id, str(person["id"]))
+    except repo.NotAvailable:
+        await query.answer("Someone else got it first 😔")
+        await query.edit_message_text(
+            f"{query.message.text}\n\n😔 Someone else got this one first. I'll message you about the next one."
+        )
+        return
+    await query.answer("It's yours! 🎉")
+    await query.edit_message_text(
+        f"✅ *It's yours!* {md(claim['food_type'])} ({md(claim['quantity'])})\n\n"
+        f"📍 Pick it up here: https://www.google.com/maps/dir/?api=1&destination={claim['lat']},{claim['lng']}\n\n"
+        "📸 When you have it, *send a photo of it here* to confirm the pickup.",
+        parse_mode="Markdown",
+    )
+    await tg_out.send_message(claim["donor_chat_id"], notify.claimed_text(claim))
+
+
+async def stop_offers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    was_on = await asyncio.to_thread(repo.set_individual_active, update.effective_chat.id, context.bot.username, False)
+    await update.effective_message.reply_text(
+        "🔕 Done. You won't get flash offers anymore. Send /start → 'I need food' to turn them back on."
+        if was_on
+        else "You're not on the flash-offer list right now. Send /start → 'I need food' to join."
+    )
+
+
 async def stale_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -582,6 +694,9 @@ def build_application(token: str, request=None) -> Application:
     builder = Application.builder().token(token)
     if request is not None:
         builder = builder.request(request).get_updates_request(request)
+    else:
+        # PTB's 5 s defaults time out on slow venue/mobile wifi; give replies room to get through
+        builder = builder.connect_timeout(10).read_timeout(20).write_timeout(20).pool_timeout(10)
     app = builder.build()
     text = filters.TEXT & ~filters.COMMAND
     fallbacks = [CommandHandler("cancel", cancel)]
@@ -598,6 +713,10 @@ def build_application(token: str, request=None) -> Application:
                 MessageHandler(text, location_expected),
             ],
             PLEDGE: [CallbackQueryHandler(pledged, pattern=r"^pledge:")],
+            IND_LOCATION: [
+                MessageHandler(filters.LOCATION, got_individual_location),
+                MessageHandler(text, location_expected),
+            ],
         },
         fallbacks=fallbacks,
         allow_reentry=True,
@@ -610,6 +729,7 @@ def build_application(token: str, request=None) -> Application:
             AI_CONFIRM: [CallbackQueryHandler(chose_ai, pattern=r"^ai:")],
             LISTING_TYPE: [CallbackQueryHandler(chose_listing_type, pattern=r"^lt:")],
             PRICE: [CallbackQueryHandler(got_price, pattern=r"^price:"), MessageHandler(text, got_price)],
+            PHOTO_PURPOSE: [CallbackQueryHandler(chose_photo_purpose, pattern=r"^purpose:")],
             FOOD: [MessageHandler(text, got_food)],
             QUANTITY: [MessageHandler(text, got_quantity)],
             WEIGHT: [CallbackQueryHandler(chose_weight, pattern=r"^kg:")],
@@ -626,6 +746,8 @@ def build_application(token: str, request=None) -> Application:
     app.add_handler(onboarding)
     app.add_handler(posting)
     # Same group, registered last: only reached when no conversation handled the update
+    app.add_handler(CallbackQueryHandler(flash_claim, pattern=r"^flash:"))  # works mid-conversation too
+    app.add_handler(CommandHandler("stop", stop_offers))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(stale_button))
     app.add_handler(MessageHandler(text, unexpected_text))

@@ -14,7 +14,17 @@ function ReachBadge({ donation: d, config, now }) {
   }
   const { phase, msUntilNext } = reachState(d, config, now)
   if (phase === 'escalated') {
-    return <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold">🚨 Urgent: no takers yet · {km} km</span>
+    const offered = d.flash_offer_count ?? 0
+    return (
+      <>
+        <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold">🚨 Urgent: no takers yet · {km} km</span>
+        {offered > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 font-semibold">
+            📣 Offered to {offered} {offered === 1 ? 'person' : 'people'} nearby
+          </span>
+        )}
+      </>
+    )
   }
   const next = msUntilNext > 0 ? formatLeft(msUntilNext) : 'now'
   return (
