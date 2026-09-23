@@ -79,7 +79,7 @@ async def confirm_claim(
     background.add_task(
         telegram.send_photo,
         done["donor_chat_id"],
-        photo_url,
+        data,
         f"✅ *Picked up!* Your {md(done['food_type'])} ({md(done['quantity'])}) "
         f"is now with *{md(done['recipient_name'])}*.\n\n{impact}Salamat for sharing! 💚",
     )

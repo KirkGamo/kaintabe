@@ -52,8 +52,8 @@ def test_confirm_completes_and_thanks_donor(upload, send, claim):
     assert d["status"] == "completed"
 
     send.assert_awaited_once()
-    _, photo_url, caption = send.await_args.args
-    assert photo_url == PHOTO_URL
+    _, photo_bytes, caption = send.await_args.args
+    assert photo_bytes == JPEG  # uploaded directly, not as a URL for Telegram to fetch
     assert "Bayanihan Pantry Jaro" in caption and "~2 kg" in caption and "5 meals" in caption
 
 
