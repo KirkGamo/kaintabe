@@ -497,7 +497,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("bot handler failed", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text("😕 Something went wrong on our side. Please try again.")
+        await update.effective_message.reply_text(
+            "😕 Something went wrong on our side (probably a connection hiccup).\n\n"
+            "If you were posting food, just send the photo again to start over. "
+            "Otherwise, send /start."
+        )
 
 
 # ---------------------------------------------------------------------------
