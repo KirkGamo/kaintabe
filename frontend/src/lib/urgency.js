@@ -32,6 +32,18 @@ export function reachState(d, config, now) {
   return { phase, msUntilNext: Math.max(0, next - now) }
 }
 
+/**
+ * Sale listings: price now and time until it turns into a free donation.
+ * Mirrors decay_sale_prices() in SQL; the server's price is what gets locked on reserve.
+ */
+export function saleState(d, config, now) {
+  const windowMs = config.widen_after_minutes * 60000
+  const elapsed = now - new Date(d.radius_widened_at).getTime()
+  const original = Number(d.original_price)
+  const price = Math.max(1, Math.round(original * (1 - elapsed / windowMs)))
+  return { price, original, msUntilFree: Math.max(0, windowMs - elapsed) }
+}
+
 export function formatLeft(ms) {
   if (ms <= 0) return 'expired'
   const s = Math.floor(ms / 1000)

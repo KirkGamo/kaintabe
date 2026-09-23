@@ -3,6 +3,7 @@
 Usage (from repo root):
     backend/.venv/Scripts/python scripts/sim_post.py                      # random demo listing
     backend/.venv/Scripts/python scripts/sim_post.py --food "Pandesal" --qty "40 pcs" --kg 2 --hours 4 --donor bakery
+    backend/.venv/Scripts/python scripts/sim_post.py --sale 120           # discount-sale listing at P120
     backend/.venv/Scripts/python scripts/sim_post.py --clear              # delete all simulated listings
 """
 import argparse
@@ -43,6 +44,7 @@ def main() -> None:
     p.add_argument("--hours", type=float, default=None)
     p.add_argument("--lat", type=float)
     p.add_argument("--lng", type=float)
+    p.add_argument("--sale", type=float, metavar="PRICE", help="post as a discount sale at this price")
     p.add_argument("--clear", action="store_true")
     a = p.parse_args()
 
@@ -71,6 +73,8 @@ def main() -> None:
         lng=a.lng if a.lng is not None else donor["lng"],
         good_for_hours=a.hours if a.hours is not None else random.choice([2, 4, 8]),
         safety_checklist={"hygienic": True, "safe_temperature": True, "contents_known": True, **SIM_MARK},
+        listing_type="sale" if a.sale else "donation",
+        price=a.sale,
     )
     print(f"posted {d['food_type']} ({d['quantity']}) from {d['donor_name']}, expires {d['expires_at']:%H:%M}, id={d['id']}")
 
