@@ -76,6 +76,34 @@ def onboard(ctx, name="Test Bakery", location=(10.7141, 122.5519)):
     return u
 
 
+def pass_safety(ctx):
+    """Answer Yes to every checklist question; returns the final update."""
+    last = len(h.SAFETY_CHECKLIST) - 1
+    for i in range(last):
+        assert run(h.answered_safety(update_tap(f"safe:{i}:yes"), ctx)) == h.SAFETY
+    u = update_tap(f"safe:{last}:yes")
+    assert run(h.answered_safety(u, ctx)) == h.END
+    return u
+
+
+def start_post(ctx):
+    """Onboard, then fill a draft up to the safety checklist."""
+    onboard(ctx)
+    run(h.got_photo(update_msg(photo=True, caption="Lumpia"), ctx))
+    run(h.got_quantity(update_msg(text="20 pieces"), ctx))
+    run(h.chose_weight(update_tap("kg:1"), ctx))
+    run(h.chose_hours(update_tap("hrs:4"), ctx))
+    return run(h.chose_pickup(update_tap("loc:saved"), ctx))
+
+
+def donation_count():
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) n from donations d join donors o on o.id = d.donor_id where o.telegram_chat_id = %s",
+            (CHAT_ID,),
+        ).fetchone()["n"]
+
+
 def test_onboarding_creates_donor():
     ctx = make_context()
     u = onboard(ctx)
@@ -117,8 +145,8 @@ def test_post_with_caption_and_saved_location(upload):
     assert run(h.got_quantity(update_msg(text="30 pieces"), ctx)) == h.WEIGHT
     assert run(h.chose_weight(update_tap("kg:1"), ctx)) == h.HOURS
     assert run(h.chose_hours(update_tap("hrs:4"), ctx)) == h.PICKUP
-    u = update_tap("loc:saved")
-    assert run(h.chose_pickup(u, ctx)) == h.END
+    assert run(h.chose_pickup(update_tap("loc:saved"), ctx)) == h.SAFETY
+    u = pass_safety(ctx)
     assert "Live now" in last_reply(u)
 
     ctx.bot.get_file.assert_awaited_once_with("large")  # largest photo size
@@ -135,6 +163,7 @@ def test_post_with_caption_and_saved_location(upload):
     assert d["photo_url"] == "https://example.com/photo.jpg"
     assert d["status"] == "posted"
     assert d["search_radius_m"] == 2000
+    assert d["safety_checklist"] == {"hygienic": True, "safe_temperature": True, "contents_known": True}
     left = d["expires_at"] - datetime.now(timezone.utc)
     assert timedelta(hours=3, minutes=58) < left <= timedelta(hours=4)
     assert ctx.user_data == {}
@@ -153,7 +182,8 @@ def test_post_without_caption_and_new_location(upload):
     u = update_tap("loc:new")
     assert run(h.chose_pickup(u, ctx)) == h.PICKUP_NEW
     assert "📎" in last_reply(u)  # explains how to pick a spot other than current GPS
-    assert run(h.got_pickup_location(update_msg(location=(10.6962, 122.5452)), ctx)) == h.END
+    assert run(h.got_pickup_location(update_msg(location=(10.6962, 122.5452)), ctx)) == h.SAFETY
+    pass_safety(ctx)
 
     d = db.connect().execute(
         "select d.* from donations d join donors o on o.id = d.donor_id where o.telegram_chat_id = %s", (CHAT_ID,)
@@ -161,6 +191,39 @@ def test_post_without_caption_and_new_location(upload):
     assert d["food_type"] == "Chicken adobo"
     assert float(d["est_kg"]) == 12
     assert (d["lat"], d["lng"]) == (10.6962, 122.5452)
+
+
+@pytest.mark.parametrize("failing_index", range(len(h.SAFETY_CHECKLIST)))
+@patch.object(h.storage, "upload_photo", new_callable=AsyncMock)
+def test_safety_no_blocks_post(upload, failing_index):
+    ctx = make_context()
+    assert start_post(ctx) == h.SAFETY
+    for i in range(failing_index):
+        assert run(h.answered_safety(update_tap(f"safe:{i}:yes"), ctx)) == h.SAFETY
+    u = update_tap(f"safe:{failing_index}:no")
+    assert run(h.answered_safety(u, ctx)) == h.END
+
+    _, _, reason = h.SAFETY_CHECKLIST[failing_index]
+    assert reason in last_reply(u) and "not posted" in last_reply(u)
+    upload.assert_not_awaited()  # nothing uploaded or saved
+    assert donation_count() == 0
+    assert ctx.user_data == {}
+
+
+@patch.object(h.storage, "upload_photo", new_callable=AsyncMock, return_value="https://example.com/p3.jpg")
+def test_safety_ignores_stale_button(upload):
+    ctx = make_context()
+    start_post(ctx)
+    run(h.answered_safety(update_tap("safe:0:yes"), ctx))
+
+    stale = update_tap("safe:0:no")  # tapping question 1's old "No" while on question 2
+    assert run(h.answered_safety(stale, ctx)) is None  # stay on current question
+    stale.callback_query.answer.assert_awaited_once_with("Please answer the latest question.")
+    assert "draft" in ctx.user_data
+
+    for i in (1, 2):
+        run(h.answered_safety(update_tap(f"safe:{i}:yes"), ctx))
+    assert donation_count() == 1
 
 
 def test_markdown_escaping():
