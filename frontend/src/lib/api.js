@@ -1,13 +1,10 @@
+import { compressImage } from './image'
 import { API_URL } from './supabase'
 
-async function post(path, body) {
+async function request(path, init) {
   let res
   try {
-    res = await fetch(`${API_URL}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    res = await fetch(`${API_URL}${path}`, { method: 'POST', ...init })
   } catch {
     throw new Error("Can't reach the server. Check your connection and try again.")
   }
@@ -17,4 +14,15 @@ async function post(path, body) {
 }
 
 export const claimDonation = (donationId, recipientId) =>
-  post('/api/claims', { donation_id: donationId, recipient_id: recipientId })
+  request('/api/claims', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ donation_id: donationId, recipient_id: recipientId }),
+  })
+
+export async function confirmPickup(claimId, recipientId, photoFile) {
+  const photo = await compressImage(photoFile)
+  const form = new FormData()
+  form.append('recipient_id', recipientId)
+  form.append('photo', photo, 'pickup.jpg')
+  return request(`/api/claims/${claimId}/confirm`, { body: form })
+}

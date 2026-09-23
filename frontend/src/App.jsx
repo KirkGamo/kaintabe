@@ -5,7 +5,7 @@ import { useClaims } from './hooks/useClaims'
 import { useConfig } from './hooks/useConfig'
 import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
-import { claimDonation } from './lib/api'
+import { claimDonation, confirmPickup } from './lib/api'
 import { distanceM } from './lib/geo'
 import { timeLeft } from './lib/urgency'
 
@@ -97,6 +97,19 @@ export default function App() {
     }
   }
 
+  async function handleConfirm(d, file) {
+    const claim = claimsByDonation[d.id]
+    try {
+      const done = await confirmPickup(claim.id, viewer.id, file)
+      addClaim({ ...claim, confirmed_at: done.confirmed_at, confirmation_photo_url: done.confirmation_photo_url })
+      const meals = d.est_kg ? ` ~${Math.max(1, Math.round(Number(d.est_kg) / 0.4))} meals rescued.` : ''
+      setToast({ kind: 'ok', text: `Pickup confirmed, thank you!${meals} The donor has been notified.` })
+    } catch (e) {
+      setToast({ kind: 'error', text: e.message })
+      throw e
+    }
+  }
+
   const card = ({ donation: d, distance, mode }) => (
     <DonationCard
       key={d.id}
@@ -108,6 +121,7 @@ export default function App() {
       selected={d.id === selectedId}
       onSelect={(x) => setSelectedId(x.id)}
       onClaim={handleClaim}
+      onConfirm={handleConfirm}
       busy={busyId === d.id}
     />
   )
