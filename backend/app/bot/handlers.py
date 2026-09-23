@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 import warnings
+from datetime import datetime, timezone
 
 from telegram import (
     InlineKeyboardButton,
@@ -113,7 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.effective_message.reply_text(
             f"Welcome back, {md(donor['name'])}! 👋\n\n"
             "To share food, just *send a photo* of it here.\n"
-            "Send /profile to update your details."
+            "/mylistings to see or take down what you posted · /profile to update your details."
             + ("\n\n💚 You're also on the flash-offer list (/stop to leave)." if on_list else ""),
             parse_mode="Markdown",
             # donors can also receive flash offers; the button re-enters the recipient branch
@@ -600,13 +601,13 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         details = (
             f"🏷️ For sale at ₱{draft['price']:g}. Buyers within {radius_km:g} km can reserve it and pay you at pickup. "
             "If it's still unsold when the price timer ends, it becomes a free donation.\n"
-            "I'll message you as soon as it's reserved."
+            "I'll message you as soon as it's reserved. Sold it elsewhere? /mylistings"
         )
     else:
         details = (
             f"Nearby community kitchens within {radius_km:g} km can see it. "
             "If no one claims it soon, I'll widen the search automatically.\n"
-            "I'll message you as soon as it's claimed."
+            "I'll message you as soon as it's claimed. Already gone? /mylistings"
         )
     await msg.reply_text(
         f"✅ *Live now!* {md(draft['food_type'])} ({md(draft['quantity'])})\n\n"
@@ -653,6 +654,65 @@ async def flash_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         parse_mode="Markdown",
     )
     await tg_out.send_message(claim["donor_chat_id"], notify.claimed_text(claim))
+
+
+def _time_left(expires_at) -> str:
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    mins = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds() // 60))
+    return f"{mins // 60}h {mins % 60:02d}m" if mins >= 60 else f"{mins} min"
+
+
+def my_listings_view(listings: list[dict]) -> tuple[str, InlineKeyboardMarkup | None]:
+    """The /mylistings message: one line per listing, a 'Mark as gone' button per unclaimed one."""
+    if not listings:
+        return "You have no live listings right now. Send a photo whenever you have food to share 📸", None
+    lines, rows = ["📋 *Your live listings*", ""], []
+    for i, d in enumerate(listings, start=1):
+        item = f"{i}. {md(d['food_type'])} ({md(d['quantity'])})"
+        if d["status"] == "claimed":
+            lines.append(f"{item}\n   ✔️ Claimed by *{md(d['claimer_name'] or 'someone')}*, they're coming")
+            continue
+        state = "🚨 no takers yet" if d["status"] == "escalated" else "📡 open"
+        if d["listing_type"] == "sale" and d["current_price"] is not None:
+            state += f" · 🏷️ ₱{float(d['current_price']):g}"
+        lines.append(f"{item}\n   {state} · ⏱ {_time_left(d['expires_at'])} left")
+        rows.append([InlineKeyboardButton(f"✅ {i}. Mark as gone", callback_data=f"gone:{d['id']}")])
+    lines += ["", "Food already given away or eaten? Tap *Mark as gone* so no one makes a wasted trip."] if rows else []
+    return "\n".join(lines), InlineKeyboardMarkup(rows) if rows else None
+
+
+async def my_listings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    if not donor:
+        await update.effective_message.reply_text("You haven't shared food yet. Send /start to set up your donor profile.")
+        return
+    text, keyboard = my_listings_view(await asyncio.to_thread(repo.my_active_listings, donor["id"]))
+    await update.effective_message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def mark_gone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    donation_id = query.data.split(":", 1)[1]
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    if not donor:
+        await query.answer("Only the donor can take this listing down.", show_alert=True)
+        return
+    try:
+        gone = await asyncio.to_thread(repo.withdraw_donation, donation_id, donor["id"])
+        await query.answer(f"Taken down: {gone['food_type']}")
+    except repo.NotAvailable:
+        claimer = await asyncio.to_thread(repo.claimer_of, donation_id)
+        await query.answer(
+            f"Already claimed by {claimer}, they're coming for it." if claimer else "This listing has already ended.",
+            show_alert=True,
+        )
+    # Re-render the list so it reflects what's live now
+    text, keyboard = my_listings_view(await asyncio.to_thread(repo.my_active_listings, donor["id"]))
+    try:
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    except Exception:  # noqa: BLE001 - e.g. message unchanged or too old to edit
+        await update.effective_message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
 async def stop_offers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -760,6 +820,8 @@ def build_application(token: str, request=None, persistence=None) -> Application
     # Same group, registered last: only reached when no conversation handled the update
     app.add_handler(CallbackQueryHandler(flash_claim, pattern=r"^flash:"))  # works mid-conversation too
     app.add_handler(CommandHandler("stop", stop_offers))
+    app.add_handler(CommandHandler("mylistings", my_listings))
+    app.add_handler(CallbackQueryHandler(mark_gone, pattern=r"^gone:"))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(stale_button))
     app.add_handler(MessageHandler(text, unexpected_text))

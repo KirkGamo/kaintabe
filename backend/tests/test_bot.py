@@ -252,6 +252,8 @@ def test_application_builds():
         "onboarding", "posting",
         "CallbackQueryHandler",  # flash:* claims
         "CommandHandler",  # /stop
+        "CommandHandler",  # /mylistings
+        "CallbackQueryHandler",  # gone:* (Mark as gone)
         "CommandHandler",  # /cancel
         "CallbackQueryHandler",  # stale buttons
         "MessageHandler",  # stray text
