@@ -237,3 +237,52 @@ def claimer_of(donation_id: str) -> str | None:
             (donation_id,),
         ).fetchone()
         return row["name"] if row else None
+
+
+# --- partner orgs via Telegram ------------------------------------------------------
+
+def get_org(chat_id: int, via_bot: str) -> dict | None:
+    """The partner org this Telegram chat represents (through this bot), if any."""
+    with db.connect() as conn:
+        return conn.execute(
+            "select * from recipients where type = 'partner_org' and telegram_chat_id = %s and via_bot = %s",
+            (chat_id, via_bot),
+        ).fetchone()
+
+
+def unlinked_orgs() -> list[dict]:
+    """Seeded partner orgs nobody has linked a Telegram account to yet."""
+    with db.connect() as conn:
+        return conn.execute(
+            "select id, name from recipients where type = 'partner_org' and telegram_chat_id is null order by name"
+        ).fetchall()
+
+
+def link_org(org_id: str, chat_id: int, via_bot: str) -> dict:
+    """First come: link an existing org to this chat. NotAvailable if someone already did."""
+    with db.connect() as conn:
+        row = conn.execute(
+            """
+            update recipients set telegram_chat_id = %s, via_bot = %s, review_status = 'pending_review'
+             where id = %s and type = 'partner_org' and telegram_chat_id is null
+            returning *
+            """,
+            (chat_id, via_bot, org_id),
+        ).fetchone()
+    if not row:
+        raise NotAvailable
+    return row
+
+
+def create_org(chat_id: int, via_bot: str, *, name: str, org_kind: str, lat: float, lng: float,
+               service_radius_m: int, hours: str, capacity: str) -> dict:
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            insert into recipients (name, type, org_kind, lat, lng, service_radius_m, hours, capacity,
+                                    verified, review_status, telegram_chat_id, via_bot)
+            values (%s, 'partner_org', %s, %s, %s, %s, %s, %s, false, 'pending_review', %s, %s)
+            returning *
+            """,
+            (name, org_kind, lat, lng, service_radius_m, hours, capacity, chat_id, via_bot),
+        ).fetchone()

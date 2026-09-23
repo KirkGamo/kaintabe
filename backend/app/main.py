@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from telegram import Update
+from telegram import MenuButtonWebApp, Update, WebAppInfo
 
 from app import db
 from app.bot.handlers import build_application
@@ -40,10 +40,14 @@ async def start_bot(bot, mode: str) -> None:
             log.warning("Telegram unreachable (%s); retrying in %ss", type(e).__name__, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30)
-    try:  # the "/" menu in the chat; cosmetic, so never block startup on it
+    try:  # the "/" menu and the 🗺️ Map button in the chat; cosmetic, so never block startup on them
         await bot.bot.set_my_commands(BOT_COMMANDS)
+        if settings.map_url:
+            await bot.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="🗺️ Map", web_app=WebAppInfo(url=settings.map_url))
+            )
     except Exception as e:  # noqa: BLE001
-        log.warning("could not set bot commands: %s", type(e).__name__)
+        log.warning("could not set bot commands/menu: %s", type(e).__name__)
     await bot.start()
     if mode == "webhook":
         await bot.bot.set_webhook(

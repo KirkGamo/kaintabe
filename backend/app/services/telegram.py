@@ -1,4 +1,5 @@
 """Outgoing Telegram messages (works in both polling and webhook mode)."""
+import json
 import logging
 
 import httpx
@@ -8,15 +9,23 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 
-async def send_message(chat_id: int | None, text: str) -> bool:
+def map_markup() -> dict | None:
+    """An 'Open map' button (Telegram Mini App) for donor notifications, if an https web URL is set."""
+    url = settings.map_url
+    return {"inline_keyboard": [[{"text": "🗺️ Open map", "web_app": {"url": url}}]]} if url else None
+
+
+async def send_message(chat_id: int | None, text: str, with_map: bool = True) -> bool:
     """Best effort: a failed notification must never break the claim/confirm flow."""
     if not chat_id or not settings.telegram_bot_token:
         return False
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if with_map and (markup := map_markup()):
+        payload["reply_markup"] = markup
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(
-                f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage", json=payload
             )
         if res.status_code != 200:
             log.warning("telegram sendMessage failed: %s %s", res.status_code, res.text[:200])
@@ -34,11 +43,14 @@ async def send_photo(chat_id: int | None, photo: bytes, caption: str) -> bool:
     """
     if not chat_id or not settings.telegram_bot_token:
         return False
+    data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "Markdown"}
+    if markup := map_markup():
+        data["reply_markup"] = json.dumps(markup)  # multipart form: JSON-encoded like the Bot API expects
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             res = await client.post(
                 f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto",
-                data={"chat_id": str(chat_id), "caption": caption, "parse_mode": "Markdown"},
+                data=data,
                 files={"photo": ("pickup.jpg", photo, "image/jpeg")},
             )
         if res.status_code == 200:
