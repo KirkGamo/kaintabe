@@ -12,10 +12,19 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
     database_url: str = ""
     telegram_bot_token: str = ""
+    # polling: local dev · webhook: deployed (Telegram pushes to PUBLIC_URL/telegram/webhook) · off: no bot
     bot_mode: str = "polling"
+    public_url: str = ""  # e.g. https://kaintabe-api.up.railway.app
+    webhook_secret: str = ""  # checked against Telegram's X-Telegram-Bot-Api-Secret-Token header
     anthropic_api_key: str = ""
+    # comma-separated, e.g. "http://localhost:5173,https://kaintabe.vercel.app"
     frontend_origin: str = "http://localhost:5173"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.frontend_origin.split(",") if o.strip()]
 
 
 settings = Settings()
 settings.supabase_url = settings.supabase_url.rstrip("/")
+settings.public_url = settings.public_url.rstrip("/")
