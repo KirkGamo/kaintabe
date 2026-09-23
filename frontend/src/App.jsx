@@ -40,7 +40,7 @@ export default function App() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white rounded-xl shadow p-6">
-        <h1 className="text-xl font-bold">Trie Code Food Rescue</h1>
+        <h1 className="text-xl font-bold">KainTabe</h1>
         <p className="text-sm text-slate-500 mb-4">Step 1: connection check</p>
         <ul>
           <StatusRow label="Supabase" check={checkSupabase} />
