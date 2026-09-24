@@ -3,6 +3,7 @@
 Usage (from repo root, using the backend venv):
     backend/.venv/Scripts/python scripts/apply_sql.py          # pending migrations
     backend/.venv/Scripts/python scripts/apply_sql.py --seed   # + supabase/seed.sql
+    backend/.venv/Scripts/python scripts/apply_sql.py --until 015   # only up to migration 015
 """
 import sys
 from pathlib import Path
@@ -26,8 +27,13 @@ def main() -> None:
         applied = {r["name"] for r in conn.execute("select name from schema_migrations")}
         conn.commit()
 
+        # --until NNN applies migrations up to and including NNN (e.g. hold back a lockdown until deploy)
+        until = sys.argv[sys.argv.index("--until") + 1] if "--until" in sys.argv else None
         for path in sorted(MIGRATIONS.glob("*.sql")):
             if path.name in applied:
+                continue
+            if until and path.name[:3] > until:
+                print(f"holding back {path.name} (--until {until})")
                 continue
             print(f"applying {path.name} ...")
             # One transaction per migration: all or nothing
