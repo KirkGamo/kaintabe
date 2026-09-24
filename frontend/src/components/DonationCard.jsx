@@ -35,10 +35,13 @@ function ReachBadge({ donation: d, config, now }) {
 }
 
 /**
- * mode: 'open'  — in range of the viewer, claimable
- *       'mine'  — claimed by the viewer, awaiting pickup
+ * mode: 'open'   — in range of the signed-in org, claimable
+ *       'mine'   — claimed by that org, awaiting pickup
+ *       'public' — no org identity: read-only, points people to the Telegram bot
  */
-export default function DonationCard({ donation: d, mode, distance, now, config, claim, selected, onSelect, onClaim, onConfirm, busy }) {
+export default function DonationCard({
+  donation: d, mode, distance, now, config, claim, selected, onSelect, onClaim, onConfirm, busy, botUrl, inTelegram,
+}) {
   const { leftMs, fraction } = timeLeft(d, now)
   const mine = mode === 'mine'
   const forSale = d.listing_type === 'sale' && !mine
@@ -110,6 +113,24 @@ export default function DonationCard({ donation: d, mode, distance, now, config,
           {busy ? (forSale ? 'Reserving…' : 'Claiming…') : forSale ? `Reserve — pay ₱${sale.price} at pickup` : 'Claim — free pickup'}
         </button>
       )}
+
+      {mode === 'public' &&
+        (inTelegram ? (
+          <p className="mt-3 text-center text-sm text-slate-500">
+            Partner kitchens claim here. Register yours with /start in the bot.
+          </p>
+        ) : (
+          <a
+            href={botUrl ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-3 block w-full rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800
+              font-semibold py-2.5 text-center transition"
+          >
+            ✈️ Claim in Telegram
+          </a>
+        ))}
 
       {mine && (
         <div className="mt-3 flex gap-2">
