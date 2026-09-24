@@ -70,6 +70,10 @@ def api_orgs(monkeypatch):
     monkeypatch.setattr(tg_auth, "_bot_username", API_BOT)
     ids = {}
     with db.connect() as conn:
+        # leftovers of an interrupted run (teardown never ran) would break the unique chat+bot index
+        stale = "select id from recipients where via_bot = %s"
+        conn.execute(f"delete from claims where recipient_id in ({stale})", (API_BOT,))
+        conn.execute("delete from recipients where via_bot = %s", (API_BOT,))
         for name, (lat, lng, tg_id) in API_ORG_SPOTS.items():
             ids[name] = str(conn.execute(
                 "insert into recipients (name, type, lat, lng, service_radius_m, telegram_chat_id, via_bot) "
