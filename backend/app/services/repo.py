@@ -309,3 +309,59 @@ def pending_pickup_for_chat(chat_id: int, via_bot: str) -> dict | None:
             """,
             (chat_id, via_bot),
         ).fetchone()
+
+
+# --- role-based map views (exact details only for the right person) -------------------
+
+LISTING_COLS = """d.id, d.donor_name, d.photo_url, d.food_type, d.quantity, d.est_kg, d.lat, d.lng,
+    d.listing_type, d.original_price, d.current_price, d.expires_at, d.search_radius_m,
+    d.radius_widened_at, d.status, d.created_at, d.safety_checklist, d.allergens, d.ai_assisted,
+    d.flash_offer_count"""
+
+
+def listings_in_range(org_id) -> list[dict]:
+    """Open listings whose current reach covers this org (the same rule claim_donation enforces)."""
+    with db.connect() as conn:
+        return conn.execute(
+            f"""
+            select {LISTING_COLS}, st_distance(d.location, r.location) as distance_m
+              from donations d join recipients r on r.id = %s
+             where d.status in ('posted', 'escalated') and d.expires_at > now()
+               and st_dwithin(d.location, r.location, d.search_radius_m)
+             order by distance_m
+            """,
+            (org_id,),
+        ).fetchall()
+
+
+def pending_pickups(recipient_ids: list) -> list[dict]:
+    """Listings these recipients claimed and haven't confirmed yet, with the claim."""
+    if not recipient_ids:
+        return []
+    with db.connect() as conn:
+        return conn.execute(
+            f"""
+            select {LISTING_COLS}, c.id as claim_id, c.recipient_id, c.reserved_price, c.claimed_at
+              from claims c join donations d on d.id = c.donation_id
+             where c.recipient_id = any(%s::uuid[]) and c.confirmed_at is null and d.status = 'claimed'
+             order by c.claimed_at desc
+            """,
+            ([str(r) for r in recipient_ids],),
+        ).fetchall()
+
+
+def donor_listings(donor_id) -> list[dict]:
+    """The donor's own live or claimed listings, exact, with who claimed them."""
+    with db.connect() as conn:
+        return conn.execute(
+            f"""
+            select {LISTING_COLS}, r.name as claimer_name
+              from donations d
+              left join claims c on c.donation_id = d.id
+              left join recipients r on r.id = c.recipient_id
+             where d.donor_id = %s
+               and (d.status = 'claimed' or (d.status in ('posted', 'escalated') and d.expires_at > now()))
+             order by d.created_at desc
+            """,
+            (donor_id,),
+        ).fetchall()
