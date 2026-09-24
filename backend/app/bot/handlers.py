@@ -141,16 +141,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if donor:
         person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
         on_list = bool(person and person["active"])
-        # donors can also take the other roles; each button re-enters that branch of the role question
-        extras = [] if on_list else [[("🙋 Get free-food offers near me", "role:recipient")]]
-        extras.append([("🏢 Also register an organization", "role:org")])
         await update.effective_message.reply_text(
             f"Welcome back, {md(donor['name'])}! 👋\n\n"
             "To share food, just *send a photo* of it here.\n"
             "/mylistings to see or take down what you posted · /profile to update your details."
             + ("\n\n💚 You're also on the flash-offer list (/stop to leave)." if on_list else ""),
             parse_mode="Markdown",
-            reply_markup=buttons(extras, with_map=True),
+            # donors can also receive flash offers; the button re-enters the recipient branch
+            reply_markup=map_only() if on_list
+            else buttons([[("🙋 Get free-food offers near me", "role:recipient")]], with_map=True),
         )
         return END if on_list else ROLE
     return await ask_role(update, context)
