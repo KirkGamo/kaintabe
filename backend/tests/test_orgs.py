@@ -49,6 +49,10 @@ def cleanup():
                 conn.execute("update recipients set telegram_chat_id = %s where id = %s", (A, JARO))
             else:
                 conn.execute("delete from recipients where id = %s", (p["row_id"],))
+        test_listings = ("select d.id from donations d join donors o on o.id = d.donor_id"
+                         " where o.telegram_chat_id in (%s, %s) or d.food_type like 'Welcome test%%'")
+        conn.execute(f"delete from claims where donation_id in ({test_listings})", (A, B))
+        conn.execute(f"delete from donations where id in ({test_listings})", (A, B))
         conn.execute("delete from recipients where telegram_chat_id in (%s, %s) and id <> %s", (A, B, JARO))
         conn.execute("delete from donors where telegram_chat_id in (%s, %s)", (A, B))
         conn.execute("update recipients set telegram_chat_id = null, via_bot = null, review_status = 'approved' "
@@ -147,7 +151,7 @@ def test_donor_notifications_carry_map_button():
 
 def test_individual_on_flash_list_can_also_register_an_org():
     """Regression: the same Telegram account may be an individual AND an org rep (was a unique-index crash)."""
-    run(msg(A, "/start"), tap(A, "role:recipient"), msg(A, location=(10.7300, 122.5600)))  # joins flash list
+    run(msg(A, "/start"), tap(A, "role:recipient"), tap(A, "indname:tg"), msg(A, location=(10.7300, 122.5600)))  # joins flash list
     fake = run(msg(A, "/start"), tap(A, "role:org"), tap(A, "orglink:new"), msg(A, "Jaro Youth Kitchen"),
                tap(A, "okind:pantry"), msg(A, location=(10.7245, 122.5570)), tap(A, "orad:3"),
                msg(A, "24 hours"), msg(A, "40 meals/day"))
@@ -166,7 +170,7 @@ def all_three_roles(chat):
     with db.connect() as conn:
         conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) "
                      "values ('Test Lugawan', 'business', 10.729, 122.5576, %s, now())", (chat,))
-    run(msg(chat, "/start"), tap(chat, "role:recipient"), msg(chat, location=(10.7300, 122.5600)))
+    run(msg(chat, "/start"), tap(chat, "role:recipient"), tap(chat, "indname:tg"), msg(chat, location=(10.7300, 122.5600)))
     run(msg(chat, "/start"), tap(chat, "role:org"), tap(chat, f"orglink:{JARO}"))
 
 
@@ -234,3 +238,63 @@ def test_error_message_does_not_blame_connection_for_bugs():
         with patch.object(Update, "effective_message", new=SimpleNamespace(reply_text=reply)):
             asyncio.run(h.on_error(Update(update_id=1), SimpleNamespace(error=err)))
         assert expected in reply.await_args.args[0]
+
+
+# --- /start welcomes -----------------------------------------------------------------------
+
+def welcome_listing(conn, donor_id=None, status="posted"):
+    """A listing next to Jaro (inside its 2 km start radius); food name marks it for cleanup."""
+    from tests.conftest import insert_donation
+    extra = {"donor_id": donor_id, "donor_name": "Test Lugawan"} if donor_id else {}
+    return insert_donation(conn, food_type="Welcome test pancit", est_kg=2, status=status, **extra)
+
+
+def test_new_user_welcome_explains_and_shows_numbers():
+    fake = run(msg(A, "/start"))
+    text = next(t for t in texts(fake) if "What brings you here?" in t)
+    assert "*How it works*" in text and "1️⃣ A donor sends a photo" in text
+    assert "kg rescued" in text  # the sample history alone makes the totals non-zero
+
+
+def test_returning_donor_sees_own_impact_and_live_listings():
+    with db.connect() as conn:
+        donor = conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) values "
+                             "('Test Lugawan', 'business', 10.725, 122.5575, %s, now()) returning id", (A,)).fetchone()["id"]
+        done = welcome_listing(conn, donor, status="completed")
+        conn.execute("insert into claims (donation_id, recipient_id, confirmed_at) values (%s, %s, now())", (done, JARO))
+        welcome_listing(conn, donor)
+    text = next(t for t in texts(run(msg(A, "/start"))) if "Welcome back" in t)
+    assert "💚 Your impact: 1 pickup · 2 kg ≈ 5 meals" in text
+    assert "📦 Live now: 1 listing" in text
+
+
+def test_new_donor_welcome_leaves_out_empty_numbers():
+    with db.connect() as conn:
+        conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) values "
+                     "('Test Lugawan', 'business', 10.725, 122.5575, %s, now())", (A,))
+    text = next(t for t in texts(run(msg(A, "/start"))) if "Welcome back" in t)
+    assert "Your impact" not in text and "Live now" not in text and "send a photo" in text
+
+
+def test_returning_org_sees_food_near_and_waiting_pickup():
+    run(msg(A, "/start"), tap(A, "role:org"), tap(A, f"orglink:{JARO}"))
+    with db.connect() as conn:
+        welcome_listing(conn)
+        waiting = welcome_listing(conn, status="claimed")
+        conn.execute("insert into claims (donation_id, recipient_id) values (%s, %s)", (waiting, JARO))
+    text = next(t for t in texts(run(msg(A, "/start"))) if "Welcome back" in t)
+    assert "🍲 Near you now:" in text and "within 6 km" in text
+    assert "🚚 Waiting for your pickup: Welcome test pancit" in text
+
+
+def test_returning_individual_is_recognized_not_asked_the_role_again():
+    run(msg(A, "/start"), tap(A, "role:recipient"), msg(A, "Ana Typed"), msg(A, location=(10.7300, 122.5600)))
+    text = texts(run(msg(A, "/start")))[-1]
+    assert "Welcome back, Ana Typed!" in text and "You're on the flash-offer list" in text
+
+    run(msg(A, "/stop"))
+    fake = run(msg(A, "/start"))
+    assert "paused" in texts(fake)[-1]
+    offered = [b.get("callback_data") for e, p in fake.sent if e == "sendMessage" and "reply_markup" in p
+               for row in p["reply_markup"]["inline_keyboard"] for b in row]
+    assert "role:recipient" in offered
