@@ -88,7 +88,7 @@ backend/    FastAPI app, Telegram bot, services, pytest suite
 frontend/   React web app (map, cards, phone bottom sheet, impact dashboard, PWA manifest)
 supabase/   migrations/ (numbered, applied in order) and seed.sql (Iloilo orgs + demo donors)
 scripts/    apply_sql, demo, demo_mode, sim_post, seed_demo_history, ai_try  (frontend/scripts/make-icons.mjs: PWA icons)
-docs/       DEMO.md: stage run sheet
+docs/       DEMO.md: online pitch run sheet
 ```
 
 ## Running locally
