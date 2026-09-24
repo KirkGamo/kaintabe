@@ -286,3 +286,26 @@ def create_org(chat_id: int, via_bot: str, *, name: str, org_kind: str, lat: flo
             """,
             (name, org_kind, lat, lng, service_radius_m, hours, capacity, chat_id, via_bot),
         ).fetchone()
+
+
+def claim_org_alerts(via_bot: str) -> list[dict]:
+    """Reserve (and return) new-food alerts this bot should send to partner orgs; each only once."""
+    with db.connect() as conn:
+        return conn.execute("select * from claim_org_alerts(%s)", (via_bot,)).fetchall()
+
+
+def pending_pickup_for_chat(chat_id: int, via_bot: str) -> dict | None:
+    """Most recent claim (last 24 h) awaiting a pickup photo, by any recipient this chat represents
+    (an individual on the flash list and/or a partner org)."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select c.id, d.food_type from claims c
+              join donations d on d.id = c.donation_id
+              join recipients r on r.id = c.recipient_id
+             where r.telegram_chat_id = %s and r.via_bot = %s
+               and c.confirmed_at is null and c.claimed_at > now() - interval '24 hours'
+             order by c.claimed_at desc limit 1
+            """,
+            (chat_id, via_bot),
+        ).fetchone()

@@ -12,7 +12,7 @@ from app.bot.handlers import build_application
 from app.bot.persistence import DbPersistence
 from app.config import settings
 from app.routes import router
-from app.services import flash
+from app.services import notifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log bot-token URLs
@@ -63,9 +63,9 @@ async def start_bot(bot, mode: str) -> None:
 
 
 async def run_bot(bot, mode: str) -> None:
-    """Connect the bot, then keep sending flash offers until shutdown cancels this task."""
+    """Connect the bot, then keep sending alerts and flash offers until shutdown cancels this task."""
     await start_bot(bot, mode)
-    await flash.run_forever(bot.bot)
+    await notifier.run_forever(bot.bot)
 
 
 @asynccontextmanager

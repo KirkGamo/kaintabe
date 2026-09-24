@@ -430,8 +430,8 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     msg = update.effective_message
     chat_id = update.effective_chat.id
     donor = await asyncio.to_thread(repo.get_donor_by_chat, chat_id)
-    person = await asyncio.to_thread(repo.get_individual, chat_id, context.bot.username)
-    pending = await asyncio.to_thread(repo.pending_pickup, person["id"]) if person else None
+    # a claim made by this chat as an individual (flash offer) or as a partner org, awaiting its photo
+    pending = await asyncio.to_thread(repo.pending_pickup_for_chat, chat_id, context.bot.username)
     if not donor and not pending:
         await msg.reply_text(
             "📸 To share food, set up a donor profile first (takes 30 seconds), then send the photo again.",
@@ -447,7 +447,7 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if pending:
         context.user_data["pending_pickup"] = pending
         if not donor:
-            return await confirm_individual_pickup(update, context)
+            return await confirm_pickup_by_photo(update, context)
         await msg.reply_text(
             "Is this photo…",
             reply_markup=buttons([[(f"✅ My pickup of {pending['food_type'][:30]}", "purpose:pickup")],
@@ -460,13 +460,13 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def chose_photo_purpose(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query.data == "purpose:pickup":
         await answer_choice(update, "Pickup confirmation")
-        return await confirm_individual_pickup(update, context)
+        return await confirm_pickup_by_photo(update, context)
     await answer_choice(update, "New food to share")
     context.user_data.pop("pending_pickup", None)
     return await start_listing(update, context)
 
 
-async def confirm_individual_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def confirm_pickup_by_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     pending = context.user_data.pop("pending_pickup")
     photo = await download_photo(context, context.user_data.pop("photo_file_id"))
     for key in ("caption", "donor"):
@@ -478,7 +478,7 @@ async def confirm_individual_pickup(update: Update, context: ContextTypes.DEFAUL
         await update.effective_message.reply_text("This pickup was already confirmed. Salamat! 💚")
         return END
     await update.effective_message.reply_text(
-        f"🙏 Pickup confirmed. Enjoy the {md(done['food_type'])}, and salamat for making sure it didn't go to waste! 💚",
+        f"🙏 Pickup confirmed: {md(done['food_type'])}. Salamat for making sure it didn't go to waste! 💚",
         parse_mode="Markdown",
     )
     await tg_out.send_photo(done["donor_chat_id"], photo, notify.picked_up_text(done))
@@ -780,6 +780,35 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # half-finished post is forgotten. Whatever they tap or type next must still get an answer.
 # ---------------------------------------------------------------------------
 
+async def org_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Claim/Reserve on a new-food alert: the org this chat represents claims it (same atomic claim as the web)."""
+    query = update.callback_query
+    donation_id = query.data.split(":", 1)[1]
+    org = await asyncio.to_thread(repo.get_org, update.effective_chat.id, context.bot.username)
+    if not org:
+        await query.answer("Only registered partner organizations can claim here. Send /start to register.",
+                           show_alert=True)
+        return
+    try:
+        claim = await asyncio.to_thread(repo.claim_donation, donation_id, str(org["id"]))
+    except repo.NotAvailable:
+        await query.answer("Already claimed or no longer available 😔")
+        await query.edit_message_text(f"{query.message.text}\n\n😔 Someone else got this one first, or it's no longer available.")
+        return
+    await query.answer("It's yours! 🎉")
+    directions = f"https://www.google.com/maps/dir/?api=1&destination={claim['lat']},{claim['lng']}"
+    paid = (f"🛒 Reserved for *₱{float(claim['reserved_price']):g}*: pay the donor in person at pickup.\n\n"
+            if claim["reserved_price"] is not None else "")
+    await query.edit_message_text(
+        f"✅ *Claimed for {md(org['name'])}:* {md(claim['food_type'])} ({md(claim['quantity'])})\n\n"
+        f"{paid}📍 Pick it up here: {directions}\n\n"
+        "📸 When you have it, *send a photo of it here* to confirm the pickup.",
+        parse_mode="Markdown",
+        reply_markup=map_only(),
+    )
+    await tg_out.send_message(claim["donor_chat_id"], notify.claimed_text(claim))
+
+
 async def flash_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """🙋 on a flash offer: first tap wins (same atomic claim as the web app)."""
     query = update.callback_query
@@ -992,6 +1021,7 @@ def build_application(token: str, request=None, persistence=None) -> Application
     app.add_handler(posting)
     # Same group, registered last: only reached when no conversation handled the update
     app.add_handler(CallbackQueryHandler(flash_claim, pattern=r"^flash:"))  # works mid-conversation too
+    app.add_handler(CallbackQueryHandler(org_claim, pattern=r"^oclaim:"))
     app.add_handler(CommandHandler("stop", stop_offers))
     app.add_handler(CommandHandler("mylistings", my_listings))
     app.add_handler(CallbackQueryHandler(mark_gone, pattern=r"^gone:"))
