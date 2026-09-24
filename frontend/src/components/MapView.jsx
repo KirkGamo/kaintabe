@@ -1,6 +1,6 @@
 import { Fragment, useEffect } from 'react'
 import L from 'leaflet'
-import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
+import { Circle, MapContainer, Marker, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
 
@@ -45,6 +45,8 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <FlyTo target={selected} />
+      {/* top-right: the phone listings sheet covers the bottom of the map */}
+      <ZoomControl position="topright" />
 
       {recipients.map((r) => (
         <Marker
