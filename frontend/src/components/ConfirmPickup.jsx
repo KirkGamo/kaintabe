@@ -47,7 +47,7 @@ export default function ConfirmPickup({ onConfirm }) {
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold py-2.5 transition"
+          className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold py-2.5 min-h-11 transition"
         >
           📸 Confirm pickup
         </button>
@@ -58,7 +58,7 @@ export default function ConfirmPickup({ onConfirm }) {
             type="button"
             disabled={busy}
             onClick={submit}
-            className="flex-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold py-2.5 transition"
+            className="flex-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold py-2.5 min-h-11 transition"
           >
             {busy ? 'Uploading…' : '✅ Confirm pickup'}
           </button>
@@ -66,7 +66,7 @@ export default function ConfirmPickup({ onConfirm }) {
             type="button"
             disabled={busy}
             onClick={reset}
-            className="rounded-lg border border-slate-300 hover:bg-slate-50 text-sm px-3 py-2.5"
+            className="rounded-lg border border-slate-300 hover:bg-slate-50 text-sm px-3 py-2.5 min-h-11"
           >
             Retake
           </button>

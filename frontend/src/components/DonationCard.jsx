@@ -112,7 +112,7 @@ export default function DonationCard({
             e.stopPropagation()
             onClaim(d)
           }}
-          className={`mt-3 w-full rounded-lg disabled:opacity-60 text-white font-semibold py-2.5 transition
+          className={`mt-3 w-full rounded-lg disabled:opacity-60 text-white font-semibold py-2.5 min-h-11 transition
             ${forSale ? 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800' : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'}`}
         >
           {busy ? (forSale ? 'Reserving…' : 'Claiming…') : forSale ? `Reserve — pay ₱${sale.price} at pickup` : 'Claim — free pickup'}
@@ -131,7 +131,7 @@ export default function DonationCard({
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
             className="mt-3 block w-full rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800
-              font-semibold py-2.5 text-center transition"
+              font-semibold py-2.5 min-h-11 text-center transition"
           >
             ✈️ Claim in Telegram
           </a>
@@ -182,7 +182,7 @@ export default function DonationCard({
               onTakeDown(d)
             }}
             className="mt-3 w-full rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-60
-              text-slate-700 font-semibold py-2.5 transition"
+              text-slate-700 font-semibold py-2.5 min-h-11 transition"
           >
             {busy ? 'Taking down…' : `🗑️ Take down: already gone`}
           </button>

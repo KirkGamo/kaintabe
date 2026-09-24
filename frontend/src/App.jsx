@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import BottomSheet from './components/BottomSheet'
 import DonationCard from './components/DonationCard'
 import MapView from './components/MapView'
 import { useConfig } from './hooks/useConfig'
@@ -51,6 +52,19 @@ function useHashView() {
   return view
 }
 
+// Phones get a full-screen map with a swipe-up sheet; wider screens keep the side panel
+function useIsDesktop() {
+  const query = '(min-width: 768px)'
+  const [desktop, setDesktop] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = () => setDesktop(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return desktop
+}
+
 /** Header identity: which roles this Telegram user holds, or the read-only public view. */
 function WhoAmI({ identity }) {
   if (identity.loading) return <span className="text-sm text-slate-400">Checking…</span>
@@ -81,7 +95,7 @@ function Tab({ href, active, children }) {
     <a
       href={href}
       aria-current={active ? 'page' : undefined}
-      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition
+      className={`inline-flex items-center min-h-10 px-3 py-1.5 rounded-lg text-sm font-medium transition
         ${active ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
     >
       {children}
@@ -99,6 +113,18 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
+  const isDesktop = useIsDesktop()
+  const [sheet, setSheet] = useState('peek')
+
+  // Selecting a pin shows its card: open the sheet (phones) and scroll the card into view
+  function select(d) {
+    setSelectedId(d.id)
+    if (!isDesktop && sheet === 'peek') setSheet('half')
+    setTimeout(
+      () => document.getElementById(`card-${d.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+      250,
+    )
+  }
 
   useEffect(() => {
     if (!toast) return
@@ -160,32 +186,81 @@ export default function App() {
     }).catch(() => {})
 
   const card = ({ donation: d, distance, mode }) => (
-    <DonationCard
-      key={d.id}
-      donation={d}
-      mode={mode}
-      distance={distance}
-      now={now}
-      config={config}
-      selected={d.id === selectedId}
-      onSelect={(x) => setSelectedId(x.id)}
-      onClaim={handleClaim}
-      onConfirm={handleConfirm}
-      onTakeDown={handleTakeDown}
-      busy={busyId === d.id}
-      botUrl={identity.botUrl}
-      inTelegram={identity.inTelegram}
-    />
+    <div key={d.id} id={`card-${d.id}`}>
+      <DonationCard
+        donation={d}
+        mode={mode}
+        distance={distance}
+        now={now}
+        config={config}
+        selected={d.id === selectedId}
+        onSelect={select}
+        onClaim={handleClaim}
+        onConfirm={handleConfirm}
+        onTakeDown={handleTakeDown}
+        busy={busyId === d.id}
+        botUrl={identity.botUrl}
+        inTelegram={identity.inTelegram}
+      />
+    </div>
+  )
+
+  const summary = (
+    <>
+      {mine.length ? `${mine.length} pickup${mine.length === 1 ? '' : 's'} · ` : ''}
+      {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
+      {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
+    </>
+  )
+  const listing = (
+    <>
+      {mine.length > 0 && (
+        <>
+          <h2 className="text-sm font-semibold text-indigo-700 px-1">Your pickups ({mine.length})</h2>
+          {mine.map(card)}
+        </>
+      )}
+
+      {own.length > 0 && (
+        <>
+          <h2 className="text-sm font-semibold text-teal-700 px-1 pt-1">Food you posted ({own.length})</h2>
+          {own.map(card)}
+        </>
+      )}
+
+      {/* phones show this in the sheet's handle already */}
+      {isDesktop && <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">{summary}</h2>}
+      {open.length === 0 && (
+        <div className="text-center text-slate-500 text-sm py-8">
+          <div className="text-4xl mb-2">🌱</div>
+          {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
+          <br />
+          New listings appear here instantly.
+          {out.length > 0 && (
+            <p className="mt-2 text-xs">
+              {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (grey areas).
+            </p>
+          )}
+        </div>
+      )}
+      {open.map(card)}
+    </>
   )
 
   return (
-    <div className="h-dvh flex flex-col bg-slate-50 text-slate-900">
-      <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-white border-b border-slate-200 z-10">
+    // Inside Telegram, --tg-viewport-stable-height excludes Telegram's own chrome; elsewhere it's the full screen
+    <div
+      className="flex flex-col bg-slate-50 text-slate-900 overflow-hidden"
+      style={{ height: 'var(--tg-viewport-stable-height, 100dvh)' }}
+    >
+      <header className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-3 sm:px-4 py-1.5 sm:py-2 bg-white border-b border-slate-200 z-10">
         <div className="flex items-center gap-2">
-          <span className="text-2xl">🍱</span>
+          <span className="text-xl sm:text-2xl">🍱</span>
           <div>
             <h1 className="font-bold leading-tight">KainTabe</h1>
-            <p className="text-xs text-slate-500 leading-tight">Surplus food, matched before it spoils</p>
+            <p className="hidden sm:block text-xs text-slate-500 leading-tight">
+              Surplus food, matched before it spoils
+            </p>
           </div>
         </div>
         <nav className="flex items-center gap-1 order-last sm:order-0 w-full sm:w-auto">
@@ -215,54 +290,28 @@ export default function App() {
           </Suspense>
         </main>
       ) : (
-        <main className="flex-1 min-h-0 flex flex-col md:flex-row">
-          <section className="h-[45dvh] md:h-auto md:flex-1 relative">
+        <main className="flex-1 min-h-0 relative md:flex md:flex-row">
+          <section className="absolute inset-0 md:static md:flex-1">
             <MapView
               items={mapItems}
               recipients={recipients}
               viewer={viewer}
               home={home}
               selected={selected}
-              onSelect={(d) => setSelectedId(d.id)}
+              onSelect={select}
               now={now}
             />
           </section>
 
-          <aside className="flex-1 md:flex-none md:w-100 min-h-0 overflow-y-auto p-3 space-y-2 border-t md:border-t-0 md:border-l border-slate-200">
-            {mine.length > 0 && (
-              <>
-                <h2 className="text-sm font-semibold text-indigo-700 px-1">Your pickups ({mine.length})</h2>
-                {mine.map(card)}
-              </>
-            )}
-
-            {own.length > 0 && (
-              <>
-                <h2 className="text-sm font-semibold text-teal-700 px-1 pt-1">Food you posted ({own.length})</h2>
-                {own.map(card)}
-              </>
-            )}
-
-            <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
-              {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
-              {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
-            </h2>
-            {open.length === 0 && (
-              <div className="text-center text-slate-500 text-sm py-8">
-                <div className="text-4xl mb-2">🌱</div>
-                {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
-                <br />
-                New listings appear here instantly.
-                {out.length > 0 && (
-                  <p className="mt-2 text-xs">
-                    {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (grey
-                    areas).
-                  </p>
-                )}
-              </div>
-            )}
-            {open.map(card)}
-          </aside>
+          {isDesktop ? (
+            <aside className="md:w-100 min-h-0 overflow-y-auto p-3 space-y-2 border-l border-slate-200">
+              {listing}
+            </aside>
+          ) : (
+            <BottomSheet snap={sheet} onSnap={setSheet} summary={summary}>
+              {listing}
+            </BottomSheet>
+          )}
         </main>
       )}
 
