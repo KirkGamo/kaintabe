@@ -40,6 +40,7 @@ def tap(chat, data):
 def cleanup():
     with db.connect() as conn:
         conn.execute("delete from recipients where telegram_chat_id in (%s, %s) and id <> %s", (A, B, JARO))
+        conn.execute("delete from donors where telegram_chat_id in (%s, %s)", (A, B))
         conn.execute("update recipients set telegram_chat_id = null, via_bot = null, review_status = 'approved' "
                      "where id = %s and telegram_chat_id in (%s, %s)", (JARO, A, B))
 
@@ -132,6 +133,24 @@ def test_map_url_prefers_web_url_then_https_origin():
 def test_donor_notifications_carry_map_button():
     with patch.object(tg_out.settings, "web_url", MAP):
         assert tg_out.map_markup()["inline_keyboard"][0][0]["web_app"]["url"] == MAP
+
+
+def test_donor_can_also_register_an_org_from_welcome_back():
+    """A registered donor's /start offers the org sign-up (before, only brand-new users saw the role menu)."""
+    with db.connect() as conn:
+        conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) "
+                     "values ('Test Lugawan', 'business', 10.729, 122.5576, %s, now())", (A,))
+    fake = run(msg(A, "/start"))
+    offered = [b.get("callback_data") for e, p in fake.sent if e == "sendMessage" and "reply_markup" in p
+               for row in p["reply_markup"]["inline_keyboard"] for b in row]
+    assert "role:org" in offered
+
+    fake = run(msg(A, "/start"), tap(A, "role:org"), tap(A, "orglink:new"), msg(A, "Jaro Lugaw Kitchen"),
+               tap(A, "okind:community_kitchen"), msg(A, location=(10.7290, 122.5576)), tap(A, "orad:5"),
+               msg(A, "7:00–19:00"), msg(A, "50 meals/day"))
+    assert not any("Something went wrong" in t for t in texts(fake))
+    assert org_row(A)["name"] == "Jaro Lugaw Kitchen"
+    assert any("also a donor" in t for t in texts(fake))  # the org welcome knows they still donate
 
 
 def test_individual_on_flash_list_can_also_register_an_org():

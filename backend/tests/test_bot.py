@@ -129,12 +129,12 @@ def test_onboarding_creates_donor():
     assert donor["pledged_at"] is not None
     assert ctx.user_data == {}
 
-    # /start again: recognized, no re-onboarding; offered the flash-offer list as a one-tap extra
+    # /start again: recognized, no re-onboarding; offered the other roles as one-tap extras
     u = update_msg(text="/start")
     assert run(h.start(u, ctx)) == h.ROLE
     assert "Welcome back" in last_reply(u)
     keyboard = u.effective_message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
-    assert keyboard[0][0].callback_data == "role:recipient"
+    assert [row[0].callback_data for row in keyboard[:2]] == ["role:recipient", "role:org"]
 
 
 def test_recipient_role_asks_location_for_flash_offers():
