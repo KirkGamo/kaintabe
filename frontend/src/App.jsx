@@ -5,6 +5,7 @@ import { useClaims } from './hooks/useClaims'
 import { useConfig } from './hooks/useConfig'
 import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
+import { useTelegramIdentity } from './hooks/useTelegramIdentity'
 import { claimDonation, confirmPickup } from './lib/api'
 import { distanceM } from './lib/geo'
 import { timeLeft } from './lib/urgency'
@@ -12,28 +13,25 @@ import { timeLeft } from './lib/urgency'
 // Charts are heavy; load them only when the Impact tab is opened
 const ImpactDashboard = lazy(() => import('./components/ImpactDashboard'))
 
-const VIEWER_KEY = 'kaintabe.viewer'
-
-function loadViewerId() {
-  try {
-    return localStorage.getItem(VIEWER_KEY)
-  } catch {
-    return null
-  }
-}
-
 /**
  * Split listings from the viewer's point of view:
- *  open — unclaimed, not expired, and its search radius reaches the viewer (nearest first)
- *  out  — unclaimed but its radius doesn't reach the viewer yet (map only)
- *  mine — claimed by the viewer, awaiting pickup
+ *  open   — unclaimed, not expired, and its search radius reaches the viewer (nearest first)
+ *  out    — unclaimed but its radius doesn't reach the viewer yet (map only)
+ *  mine   — claimed by the viewer, awaiting pickup
+ *  public — no org identity (normal browser, or a non-org in Telegram): every live listing, read-only
  * Listings claimed by other orgs are hidden.
  */
 function classify(donations, claimsByDonation, viewer, now) {
   const open = []
   const out = []
   const mine = []
-  if (!viewer) return { open, out, mine }
+  if (!viewer) {
+    for (const d of donations) {
+      if (d.status !== 'claimed' && timeLeft(d, now).leftMs > 0) open.push({ donation: d, distance: null, mode: 'public' })
+    }
+    open.sort((a, b) => new Date(a.donation.expires_at) - new Date(b.donation.expires_at))
+    return { open, out, mine }
+  }
   for (const d of donations) {
     const distance = distanceM(viewer, d)
     if (d.status === 'claimed') {
@@ -60,6 +58,29 @@ function useHashView() {
   return view
 }
 
+/** Header identity: the org acting (inside Telegram), or a read-only public view. */
+function WhoAmI({ identity }) {
+  if (identity.loading) return <span className="text-sm text-slate-400">Checking…</span>
+  if (identity.org) {
+    const pending = identity.org.review_status === 'pending_review'
+    return (
+      <span className="text-sm flex items-center gap-1.5 min-w-0">
+        <span className="font-semibold truncate max-w-48">🏢 {identity.org.name}</span>
+        {pending && (
+          <span className="shrink-0 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+            Pending review
+          </span>
+        )}
+      </span>
+    )
+  }
+  return (
+    <span className="text-sm text-slate-500" title="Partner organizations claim food inside the KainTabe Telegram bot">
+      👀 Public view{identity.inTelegram && identity.firstName ? ` · ${identity.firstName}` : ''}
+    </span>
+  )
+}
+
 function Tab({ href, active, children }) {
   return (
     <a
@@ -80,23 +101,10 @@ export default function App() {
   const { claimsByDonation, addClaim } = useClaims()
   const recipients = useRecipients()
   const config = useConfig()
-  const [viewerId, setViewerId] = useState(loadViewerId)
+  const identity = useTelegramIdentity()
   const [selectedId, setSelectedId] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
-
-  // Default to the first partner org once loaded
-  useEffect(() => {
-    if (recipients.length && !recipients.some((r) => r.id === viewerId)) setViewerId(recipients[0].id)
-  }, [recipients, viewerId])
-
-  useEffect(() => {
-    try {
-      if (viewerId) localStorage.setItem(VIEWER_KEY, viewerId)
-    } catch {
-      /* storage unavailable: selection just won't persist */
-    }
-  }, [viewerId])
 
   useEffect(() => {
     if (!toast) return
@@ -104,7 +112,8 @@ export default function App() {
     return () => clearTimeout(id)
   }, [toast])
 
-  const viewer = recipients.find((r) => r.id === viewerId)
+  // The acting org is proven by Telegram (Mini App); nobody can pick an org by hand any more
+  const viewer = identity.org
   const { open, out, mine } = useMemo(
     () => classify(donations, claimsByDonation, viewer, now),
     [donations, claimsByDonation, viewer, now],
@@ -158,6 +167,8 @@ export default function App() {
       onClaim={handleClaim}
       onConfirm={handleConfirm}
       busy={busyId === d.id}
+      botUrl={identity.botUrl}
+      inTelegram={identity.inTelegram}
     />
   )
 
@@ -180,20 +191,7 @@ export default function App() {
           </Tab>
         </nav>
         <div className="flex items-center gap-3">
-          <label className={`text-sm flex items-center gap-2 ${view === 'impact' ? 'invisible' : ''}`}>
-            <span className="text-slate-500 hidden sm:inline">Viewing as</span>
-            <select
-              value={viewerId ?? ''}
-              onChange={(e) => setViewerId(e.target.value)}
-              className="border border-slate-300 rounded-lg px-2 py-1 bg-white text-sm max-w-48"
-            >
-              {recipients.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <WhoAmI identity={identity} />
           <span
             className={`text-xs font-medium flex items-center gap-1 ${live ? 'text-emerald-600' : 'text-slate-400'}`}
             title={live ? 'Receiving live updates' : 'Connecting…'}
@@ -232,7 +230,7 @@ export default function App() {
             )}
 
             <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
-              {open.length} listing{open.length === 1 ? '' : 's'} near you
+              {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
             </h2>
             {open.length === 0 && (
               <div className="text-center text-slate-500 text-sm py-8">

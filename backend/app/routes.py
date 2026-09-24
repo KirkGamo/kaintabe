@@ -1,10 +1,15 @@
-"""HTTP API used by the web app. The browser only reads via Supabase; state changes come here."""
+"""HTTP API used by the web app. The browser only reads via Supabase; state changes come here.
+
+Who is acting is proven by the Telegram Mini App `initData` (see tg_auth), never by an id the
+client sends: a normal browser can view the map but cannot claim or confirm.
+"""
 import asyncio
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app import tg_auth
 from app.services import notify, repo, storage, telegram
 
 router = APIRouter(prefix="/api")
@@ -14,13 +19,41 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
 class ClaimRequest(BaseModel):
     donation_id: UUID
-    recipient_id: UUID
+    recipient_id: UUID | None = None  # ignored: the org comes from the verified Telegram user
+
+
+async def current_org(user: dict = Depends(tg_auth.telegram_user)) -> dict:
+    """The partner org the verified Telegram user represents, or 403."""
+    org = await asyncio.to_thread(repo.get_org, int(user["id"]), await tg_auth.bot_username())
+    if not org:
+        raise HTTPException(403, "Only registered partner organizations can claim. Register in the KainTabe bot.")
+    return org
+
+
+def _public_org(org: dict | None) -> dict | None:
+    if not org:
+        return None
+    keys = ("id", "name", "type", "org_kind", "review_status", "lat", "lng", "service_radius_m", "capacity", "hours")
+    return {k: org[k] for k in keys}
+
+
+@router.get("/config")
+async def config():
+    """Public: what the web app needs to link people to the bot."""
+    return {"bot_username": await tg_auth.bot_username()}
+
+
+@router.get("/me")
+async def me(user: dict = Depends(tg_auth.telegram_user)):
+    """Who opened the Mini App: their Telegram name and the org they represent (if any)."""
+    org = await asyncio.to_thread(repo.get_org, int(user["id"]), await tg_auth.bot_username())
+    return {"telegram_user": {"id": user["id"], "first_name": user.get("first_name")}, "org": _public_org(org)}
 
 
 @router.post("/claims", status_code=201)
-async def create_claim(body: ClaimRequest, background: BackgroundTasks):
+async def create_claim(body: ClaimRequest, background: BackgroundTasks, org: dict = Depends(current_org)):
     try:
-        claim = await asyncio.to_thread(repo.claim_donation, str(body.donation_id), str(body.recipient_id))
+        claim = await asyncio.to_thread(repo.claim_donation, str(body.donation_id), str(org["id"]))
     except repo.NotAvailable:
         raise HTTPException(409, "This listing was just claimed by someone else or is no longer available.")
 
@@ -39,13 +72,14 @@ async def create_claim(body: ClaimRequest, background: BackgroundTasks):
 async def confirm_claim(
     claim_id: UUID,
     background: BackgroundTasks,
-    recipient_id: UUID = Form(...),
     photo: UploadFile = File(...),
+    recipient_id: UUID | None = Form(default=None),  # ignored: the org comes from the verified Telegram user
+    org: dict = Depends(current_org),
 ):
     claim = await asyncio.to_thread(repo.get_claim, str(claim_id))
     if not claim:
         raise HTTPException(404, "Claim not found.")
-    if claim["recipient_id"] != recipient_id:
+    if claim["recipient_id"] != org["id"]:
         raise HTTPException(403, "This pickup belongs to another organization.")
     if claim["confirmed_at"]:
         raise HTTPException(409, "This pickup was already confirmed.")

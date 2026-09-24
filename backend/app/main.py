@@ -7,7 +7,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from telegram import MenuButtonWebApp, Update, WebAppInfo
 
-from app import db
+from app import db, tg_auth
 from app.bot.handlers import build_application
 from app.bot.persistence import DbPersistence
 from app.config import settings
@@ -40,6 +40,7 @@ async def start_bot(bot, mode: str) -> None:
             log.warning("Telegram unreachable (%s); retrying in %ss", type(e).__name__, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30)
+    tg_auth._bot_username = bot.bot.username  # the API links Mini App users to orgs of this bot
     try:  # the "/" menu and the 🗺️ Map button in the chat; cosmetic, so never block startup on them
         await bot.bot.set_my_commands(BOT_COMMANDS)
         if settings.map_url:
