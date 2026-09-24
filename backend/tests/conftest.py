@@ -49,3 +49,40 @@ def frontend_env():
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip()
     return env
+
+
+# --- signed Telegram Mini App identities for API tests ---------------------------------------
+
+API_BOT = "api_test_bot"
+API_ORG_SPOTS = {  # same places as the seeded pantries, so range behavior is identical
+    "jaro": (10.7245, 122.5570, -210001),
+    "lapaz": (10.7128, 122.5700, -210002),
+    "cityproper": (10.6965, 122.5645, -210003),
+}
+
+
+@pytest.fixture
+def api_orgs(monkeypatch):
+    """Three test partner orgs linked to fake Telegram users of a fake bot, plus signed headers for each."""
+    from app import tg_auth
+    from app.config import settings
+
+    monkeypatch.setattr(tg_auth, "_bot_username", API_BOT)
+    ids = {}
+    with db.connect() as conn:
+        for name, (lat, lng, tg_id) in API_ORG_SPOTS.items():
+            ids[name] = str(conn.execute(
+                "insert into recipients (name, type, lat, lng, service_radius_m, telegram_chat_id, via_bot) "
+                "values (%s, 'partner_org', %s, %s, 8000, %s, %s) returning id",
+                (f"API Org {name}", lat, lng, tg_id, API_BOT),
+            ).fetchone()["id"])
+
+    def headers(name=None, tg_id=None):
+        uid = tg_id if tg_id is not None else API_ORG_SPOTS[name][2]
+        init = tg_auth.sign_init_data({"id": uid, "first_name": "Tester"}, settings.telegram_bot_token)
+        return {"X-Telegram-Init-Data": init}
+
+    yield ids, headers
+    with db.connect() as conn:
+        conn.execute("delete from claims where recipient_id = any(%s::uuid[])", (list(ids.values()),))
+        conn.execute("delete from recipients where id = any(%s::uuid[])", (list(ids.values()),))
