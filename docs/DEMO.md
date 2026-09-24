@@ -16,8 +16,8 @@ backend/.venv/Scripts/python scripts/demo.py
 
 - [ ] **Register all three roles on the prod bot** (@KainTabe_bot), from the presenter's phone. One Telegram account can hold all three.
   - [ ] **Donor:** already done (Lugawan ni Bro).
-  - [ ] **Org:** `/start` → *🏢 We're a community kitchen / org* → *➕ Register a new organization*. Pick 5 km and put the location near the donor spot, in Jaro.
-  - [ ] **Individual:** `/start` → 🙋 *I need food* (currently paused with /stop; this turns it back on).
+  - [ ] **Org:** `/start` → *🏢 Also register an organization* → *➕ Register a new organization* (not a listed pantry: `demo.py` uses those as stand-ins). Pick 5 km and put the location near the donor spot, in Jaro.
+  - [ ] **Individual:** `/start` → *🙋 Get free-food offers near me*, then send your location (currently paused with /stop; this turns it back on).
 - [ ] **Check the setup:** run `demo status`. All three roles should show, and the individual should not say *paused*.
 - [ ] **Rehearse the whole script once** with `demo prepare` … `demo reset`.
 - [ ] **Record a backup video** of one full run: a screen recording of the phone plus the projector map. If the venue Wi-Fi or Telegram fails on stage, play it instead.

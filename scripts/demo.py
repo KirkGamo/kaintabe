@@ -147,7 +147,7 @@ def cmd_status(ctx: Ctx, a) -> None:
         if role == "org" and row:
             extra = f" ({row['review_status']}, {row['service_radius_m'] / 1000:g} km)"
         if role == "individual" and row:
-            extra = "" if row["active"] else "  <- paused (/stop); send /start -> I need food to get flash offers"
+            extra = "" if row["active"] else "  <- paused (/stop); /start -> Get free-food offers near me"
         print(f"  you as {role:<10}: {row['name'] + extra if row else '-'}")
     print(f"live listings ({len(live)}):")
     for d in live:
@@ -177,9 +177,9 @@ def cmd_prepare(ctx: Ctx, a) -> None:
     if not roles["donor"]:
         todo.append("register as a donor: /start -> I have food to share")
     if not roles["org"]:
-        todo.append("register your org: /start -> We're a community kitchen / org (5 km radius)")
+        todo.append("register your org: /start -> Also register an organization -> Register a new organization (5 km)")
     if not roles["individual"] or not roles["individual"]["active"]:
-        todo.append("for the flash-offer beat: /start -> I need food")
+        todo.append("for the flash-offer beat: /start -> Get free-food offers near me")
     if todo:
         print(f"\nOn your phone (@{ctx.bot}):")
         for t in todo:
