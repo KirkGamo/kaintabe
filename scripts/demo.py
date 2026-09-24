@@ -302,7 +302,8 @@ def remove_standin_listings() -> int:
 
 
 SEEDED_INDIVIDUALS = ["00000000-0000-0000-0000-00000000b001", "00000000-0000-0000-0000-00000000b002"]
-NOT_HISTORY = "not (safety_checklist @> '{\"seed_history\": true}')"
+# coalesce: the earliest listings predate the checklist (null), and "not null" would skip them
+NOT_HISTORY = "not (coalesce(safety_checklist, '{}') @> '{\"seed_history\": true}')"
 
 
 def cmd_wipe(ctx: Ctx, a) -> None:
