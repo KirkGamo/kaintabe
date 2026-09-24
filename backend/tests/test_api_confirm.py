@@ -1,4 +1,4 @@
-"""POST /api/claims/{id}/confirm: only the claiming org (signed Telegram initData) can confirm."""
+"""POST /api/claims/{id}/confirm: only whoever claimed it (org or individual, by signed initData) can confirm."""
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -75,7 +75,7 @@ def test_other_org_cannot_confirm(upload, claim):
 def test_confirm_needs_telegram_identity(upload, claim):
     claim_id, _, headers = claim
     assert confirm(claim_id, {}).status_code == 401  # a normal browser can't confirm
-    assert confirm(claim_id, headers(tg_id=-219999)).status_code == 403  # Telegram user, but not an org
+    assert confirm(claim_id, headers(tg_id=-219999)).status_code == 403  # Telegram user with no role
     upload.assert_not_awaited()
 
 
@@ -117,3 +117,30 @@ def test_meal_wording_singular_and_plural():
     base = {"food_type": "Pizza", "quantity": "2 pcs", "recipient_name": "Kirk", "reserved_price": None}
     assert "≈ 1 meal." in notify.picked_up_text({**base, "est_kg": 0.5})
     assert "≈ 5 meals." in notify.picked_up_text({**base, "est_kg": 2})
+
+
+@patch("app.routes.telegram.send_photo", new_callable=AsyncMock)
+@patch("app.routes.storage.upload_photo", new_callable=AsyncMock, return_value=PHOTO_URL)
+def test_individual_confirms_their_flash_pickup(upload, send, api_orgs):
+    """Regression: the map showed individuals the confirm button, but the API only accepted orgs (403)."""
+    from app.services import repo
+    _, headers = api_orgs
+    person = repo.upsert_individual(-219101, "Karlo", 10.7260, 122.5585, "api_test_bot")
+    other = repo.upsert_individual(-219102, "Someone", 10.7260, 122.5585, "api_test_bot")
+    conn = db.connect()
+    donation_id = insert_donation(conn, food_type="Confirm test flash", est_kg=2, status="escalated", radius_m=8000)
+    c = conn.execute("select * from claim_donation(%s, %s)", (donation_id, person["id"])).fetchone()
+    conn.commit()
+    try:
+        assert confirm(str(c["id"]), headers(tg_id=-219102)).status_code == 403  # not theirs
+        upload.assert_not_awaited()
+        res = confirm(str(c["id"]), headers(tg_id=-219101))
+        assert res.status_code == 200, res.text
+        assert res.json()["donation_status"] == "completed"
+        assert "Karlo" in send.await_args.args[2]
+    finally:
+        conn.execute("delete from claims where donation_id = %s", (donation_id,))
+        conn.execute("delete from donations where id = %s", (donation_id,))
+        conn.execute("delete from recipients where id = any(%s::uuid[])", ([str(person["id"]), str(other["id"])],))
+        conn.commit()
+        conn.close()

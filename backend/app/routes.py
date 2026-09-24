@@ -116,14 +116,23 @@ async def confirm_claim(
     claim_id: UUID,
     background: BackgroundTasks,
     photo: UploadFile = File(...),
-    recipient_id: UUID | None = Form(default=None),  # ignored: the org comes from the verified Telegram user
-    org: dict = Depends(current_org),
+    recipient_id: UUID | None = Form(default=None),  # ignored: who is confirming comes from Telegram
+    user: dict = Depends(tg_auth.telegram_user),
 ):
+    # Whoever claimed it confirms it: a partner org, or an individual who took a flash offer
+    chat_id, bot = int(user["id"]), await tg_auth.bot_username()
+    org, person = await asyncio.gather(
+        asyncio.to_thread(repo.get_org, chat_id, bot),
+        asyncio.to_thread(repo.get_individual, chat_id, bot),
+    )
+    mine = {r["id"] for r in (org, person) if r}
+    if not mine:
+        raise HTTPException(403, "Only the person or organization that claimed this food can confirm the pickup.")
     claim = await asyncio.to_thread(repo.get_claim, str(claim_id))
     if not claim:
         raise HTTPException(404, "Claim not found.")
-    if claim["recipient_id"] != org["id"]:
-        raise HTTPException(403, "This pickup belongs to another organization.")
+    if claim["recipient_id"] not in mine:
+        raise HTTPException(403, "This pickup was claimed by someone else.")
     if claim["confirmed_at"]:
         raise HTTPException(409, "This pickup was already confirmed.")
     if not (photo.content_type or "").startswith("image/"):

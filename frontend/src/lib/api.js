@@ -37,7 +37,9 @@ export const claimDonation = (donationId, recipientId) =>
 export async function confirmPickup(claimId, recipientId, photoFile) {
   const photo = await compressImage(photoFile)
   const form = new FormData()
-  form.append('recipient_id', recipientId)
+  // ignored by the API (who confirms comes from Telegram); an individual has no org id to send,
+  // and FormData would turn undefined into the text "undefined"
+  if (recipientId) form.append('recipient_id', recipientId)
   form.append('photo', photo, 'pickup.jpg')
   return request(`/api/claims/${claimId}/confirm`, { body: form })
 }
