@@ -9,6 +9,6 @@ export default defineConfig({
     allowedHosts: ['.trycloudflare.com'],
     // With VITE_API_URL empty, API calls are same-origin (/api/...) and forwarded to the local backend,
     // so one tunnel serves both the page and the API
-    proxy: { '/api': 'http://localhost:8000' },
+    proxy: { '/api': 'http://127.0.0.1:8000' },  // not 'localhost': Node may resolve it to IPv6 ::1
   },
 })
