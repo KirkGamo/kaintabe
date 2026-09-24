@@ -1,49 +1,42 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import DonationCard from './components/DonationCard'
 import MapView from './components/MapView'
-import { useClaims } from './hooks/useClaims'
 import { useConfig } from './hooks/useConfig'
 import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
 import { useTelegramIdentity } from './hooks/useTelegramIdentity'
-import { claimDonation, confirmPickup } from './lib/api'
-import { distanceM } from './lib/geo'
+import { claimDonation, confirmPickup, withdrawListing } from './lib/api'
 import { timeLeft } from './lib/urgency'
 
 // Charts are heavy; load them only when the Impact tab is opened
 const ImpactDashboard = lazy(() => import('./components/ImpactDashboard'))
 
+const alive = (d, now) => d.status !== 'claimed' && timeLeft(d, now).leftMs > 0
+
 /**
- * Split listings from the viewer's point of view:
- *  open   — unclaimed, not expired, and its search radius reaches the viewer (nearest first)
- *  out    — unclaimed but its radius doesn't reach the viewer yet (map only)
- *  mine   — claimed by the viewer, awaiting pickup
- *  public — no org identity (normal browser, or a non-org in Telegram): every live listing, read-only
- * Listings claimed by other orgs are hidden.
+ * What this viewer sees. Everyone gets the public feed (approximate areas, no names/photos);
+ * exact rows come only from /api/map for the viewer's own roles:
+ *  open — org: listings within its reach (exact, claimable) · otherwise: public areas (read-only)
+ *  out  — org: public areas of listings its reach doesn't cover yet
+ *  mine — org/individual: their claims awaiting pickup (exact)
+ *  own  — donor: their own listings (exact, Take down)
  */
-function classify(donations, claimsByDonation, viewer, now) {
-  const open = []
-  const out = []
-  const mine = []
-  if (!viewer) {
-    for (const d of donations) {
-      if (d.status !== 'claimed' && timeLeft(d, now).leftMs > 0) open.push({ donation: d, distance: null, mode: 'public' })
-    }
-    open.sort((a, b) => new Date(a.donation.expires_at) - new Date(b.donation.expires_at))
-    return { open, out, mine }
+function buildView(publicListings, identity, now) {
+  const exact = new Set([...identity.inRange, ...identity.myPickups, ...identity.myListings].map((d) => d.id))
+  const mine = identity.myPickups.map((d) => ({ donation: d, distance: null, mode: 'mine' }))
+  const own = identity.myListings.map((d) => ({ donation: d, distance: null, mode: 'own' }))
+  const others = publicListings.filter((d) => !exact.has(d.id) && alive(d, now))
+
+  if (identity.org) {
+    const open = identity.inRange
+      .filter((d) => alive(d, now))
+      .map((d) => ({ donation: d, distance: d.distance_m, mode: 'open' }))
+    return { open, out: others.map((d) => ({ donation: d, distance: null, mode: 'out' })), mine, own }
   }
-  for (const d of donations) {
-    const distance = distanceM(viewer, d)
-    if (d.status === 'claimed') {
-      if (claimsByDonation[d.id]?.recipient_id === viewer.id) mine.push({ donation: d, distance, mode: 'mine' })
-    } else if (timeLeft(d, now).leftMs > 0) {
-      if (distance <= d.search_radius_m) open.push({ donation: d, distance, mode: 'open' })
-      else out.push({ donation: d, distance, mode: 'out' })
-    }
-  }
-  open.sort((a, b) => a.distance - b.distance)
-  mine.sort((a, b) => a.distance - b.distance)
-  return { open, out, mine }
+  const open = others
+    .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at))
+    .map((d) => ({ donation: d, distance: null, mode: 'public' }))
+  return { open, out: [], mine, own }
 }
 
 // #impact opens the dashboard directly (handy as the demo's closing screen)
@@ -58,25 +51,27 @@ function useHashView() {
   return view
 }
 
-/** Header identity: the org acting (inside Telegram), or a read-only public view. */
+/** Header identity: which roles this Telegram user holds, or the read-only public view. */
 function WhoAmI({ identity }) {
   if (identity.loading) return <span className="text-sm text-slate-400">Checking…</span>
-  if (identity.org) {
-    const pending = identity.org.review_status === 'pending_review'
+  const { org, donor, individual } = identity
+  if (!org && !donor && !individual) {
     return (
-      <span className="text-sm flex items-center gap-1.5 min-w-0">
-        <span className="font-semibold truncate max-w-48">🏢 {identity.org.name}</span>
-        {pending && (
-          <span className="shrink-0 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-            Pending review
-          </span>
-        )}
+      <span className="text-sm text-slate-500" title="Exact locations are shown only to the people who need them">
+        👀 Public view{identity.inTelegram && identity.firstName ? ` · ${identity.firstName}` : ''}
       </span>
     )
   }
   return (
-    <span className="text-sm text-slate-500" title="Partner organizations claim food inside the KainTabe Telegram bot">
-      👀 Public view{identity.inTelegram && identity.firstName ? ` · ${identity.firstName}` : ''}
+    <span className="text-sm flex items-center gap-1.5 min-w-0">
+      <span className="font-semibold truncate max-w-48">
+        {org ? `🏢 ${org.name}` : donor ? `🍱 ${donor.name}` : `🙋 ${identity.firstName ?? 'You'}`}
+      </span>
+      {org?.review_status === 'pending_review' && (
+        <span className="shrink-0 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+          Pending review
+        </span>
+      )}
     </span>
   )
 }
@@ -97,11 +92,10 @@ function Tab({ href, active, children }) {
 export default function App() {
   const view = useHashView()
   const now = useNow()
-  const { donations, live } = useDonations()
-  const { claimsByDonation, addClaim } = useClaims()
+  const { donations, live, changedAt } = useDonations()
   const recipients = useRecipients()
   const config = useConfig()
-  const identity = useTelegramIdentity()
+  const identity = useTelegramIdentity(changedAt)
   const [selectedId, setSelectedId] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
@@ -112,46 +106,58 @@ export default function App() {
     return () => clearTimeout(id)
   }, [toast])
 
-  // The acting org is proven by Telegram (Mini App); nobody can pick an org by hand any more
+  // The acting org is proven by Telegram (Mini App); nobody can pick an org by hand
   const viewer = identity.org
-  const { open, out, mine } = useMemo(
-    () => classify(donations, claimsByDonation, viewer, now),
-    [donations, claimsByDonation, viewer, now],
-  )
-  const mapItems = [...out, ...open, ...mine]
+  const { open, out, mine, own } = useMemo(() => buildView(donations, identity, now), [donations, identity, now])
+  const mapItems = [...out, ...open, ...own, ...mine]
   const selected = mapItems.find((i) => i.donation.id === selectedId)?.donation ?? null
+  const home = viewer
+    ? { lat: viewer.lat, lng: viewer.lng, label: viewer.name }
+    : identity.donor
+      ? { lat: identity.donor.lat, lng: identity.donor.lng, label: 'Your pickup spot' }
+      : identity.individual
+        ? { lat: identity.individual.lat, lng: identity.individual.lng, label: 'Your spot' }
+        : null
 
-  async function handleClaim(d) {
+  async function run(d, action) {
     setBusyId(d.id)
     try {
-      const claim = await claimDonation(d.id, viewer.id)
-      addClaim(claim)
-      setSelectedId(d.id)
-      const text =
-        claim.reserved_price != null
-          ? `Reserved ${d.food_type} for ₱${Number(claim.reserved_price)}. Pay the donor at pickup.`
-          : `Claimed ${d.food_type}! The donor has been notified.`
-      setToast({ kind: 'ok', text })
+      await action()
+      await identity.refresh()
     } catch (e) {
       setToast({ kind: 'error', text: e.message })
+      throw e
     } finally {
       setBusyId(null)
     }
   }
 
-  async function handleConfirm(d, file) {
-    const claim = claimsByDonation[d.id]
-    try {
-      const done = await confirmPickup(claim.id, viewer.id, file)
-      addClaim({ ...claim, confirmed_at: done.confirmed_at, confirmation_photo_url: done.confirmation_photo_url })
+  const handleClaim = (d) =>
+    run(d, async () => {
+      const claim = await claimDonation(d.id, viewer.id)
+      setSelectedId(d.id)
+      setToast({
+        kind: 'ok',
+        text:
+          claim.reserved_price != null
+            ? `Reserved ${d.food_type} for ₱${Number(claim.reserved_price)}. Pay the donor at pickup.`
+            : `Claimed ${d.food_type}! The donor has been notified.`,
+      })
+    }).catch(() => {})
+
+  const handleConfirm = (d, file) =>
+    run(d, async () => {
+      await confirmPickup(d.claim_id, viewer?.id, file)
       const n = d.est_kg ? Math.max(1, Math.round(Number(d.est_kg) / 0.4)) : 0
       const meals = n ? ` ~${n} meal${n === 1 ? '' : 's'} rescued.` : ''
       setToast({ kind: 'ok', text: `Pickup confirmed, thank you!${meals} The donor has been notified.` })
-    } catch (e) {
-      setToast({ kind: 'error', text: e.message })
-      throw e
-    }
-  }
+    })
+
+  const handleTakeDown = (d) =>
+    run(d, async () => {
+      await withdrawListing(d.id)
+      setToast({ kind: 'ok', text: `Taken down: ${d.food_type}` })
+    }).catch(() => {})
 
   const card = ({ donation: d, distance, mode }) => (
     <DonationCard
@@ -161,11 +167,11 @@ export default function App() {
       distance={distance}
       now={now}
       config={config}
-      claim={claimsByDonation[d.id]}
       selected={d.id === selectedId}
       onSelect={(x) => setSelectedId(x.id)}
       onClaim={handleClaim}
       onConfirm={handleConfirm}
+      onTakeDown={handleTakeDown}
       busy={busyId === d.id}
       botUrl={identity.botUrl}
       inTelegram={identity.inTelegram}
@@ -215,6 +221,7 @@ export default function App() {
               items={mapItems}
               recipients={recipients}
               viewer={viewer}
+              home={home}
               selected={selected}
               onSelect={(d) => setSelectedId(d.id)}
               now={now}
@@ -229,19 +236,27 @@ export default function App() {
               </>
             )}
 
+            {own.length > 0 && (
+              <>
+                <h2 className="text-sm font-semibold text-teal-700 px-1 pt-1">Food you posted ({own.length})</h2>
+                {own.map(card)}
+              </>
+            )}
+
             <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
               {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
+              {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
             </h2>
             {open.length === 0 && (
               <div className="text-center text-slate-500 text-sm py-8">
                 <div className="text-4xl mb-2">🌱</div>
-                Nothing within reach right now.
+                {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
                 <br />
                 New listings appear here instantly.
                 {out.length > 0 && (
                   <p className="mt-2 text-xs">
-                    {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (faded
-                    pins).
+                    {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (grey
+                    areas).
                   </p>
                 )}
               </div>

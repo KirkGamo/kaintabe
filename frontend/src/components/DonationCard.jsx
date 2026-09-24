@@ -37,18 +37,23 @@ function ReachBadge({ donation: d, config, now }) {
 /**
  * mode: 'open'   — in range of the signed-in org, claimable
  *       'mine'   — claimed by that org, awaiting pickup
- *       'public' — no org identity: read-only, points people to the Telegram bot
+ *       'public' — no org identity: read-only, approximate, points people to the Telegram bot
+ *       'own'    — the signed-in donor's own listing: Take down (or who claimed it)
  */
 export default function DonationCard({
-  donation: d, mode, distance, now, config, claim, selected, onSelect, onClaim, onConfirm, busy, botUrl, inTelegram,
+  donation: d, mode, distance, now, config, claim, selected, onSelect, onClaim, onConfirm, onTakeDown, busy, botUrl,
+  inTelegram,
 }) {
   const { leftMs, fraction } = timeLeft(d, now)
   const mine = mode === 'mine'
   const forSale = d.listing_type === 'sale' && !mine
   const sale = forSale ? saleState(d, config, now) : null
-  const reservedPrice = mine && claim?.reserved_price != null ? Number(claim.reserved_price) : null
+  // claimed listings carry their reservation (from /api/map); older callers may still pass `claim`
+  const reserved = d.reserved_price ?? claim?.reserved_price
+  const reservedPrice = mine && reserved != null ? Number(reserved) : null
+  const own = mode === 'own'
   const badge = mine ? 'bg-indigo-100 text-indigo-700' : URGENCY_COLORS[urgency(fraction)].badge
-  const safetyChecked = d.safety_checklist && Object.values(d.safety_checklist).every(Boolean)
+  const safetyChecked = d.safety_checked ?? (d.safety_checklist && Object.values(d.safety_checklist).every(Boolean))
 
   return (
     <div
@@ -74,7 +79,7 @@ export default function DonationCard({
             </span>
           </div>
           <p className="text-sm text-slate-600">
-            {d.quantity}
+            {d.quantity ?? 'Surplus food'}
             {d.est_kg ? ` · ~${Number(d.est_kg)} kg` : ''}
           </p>
           {sale && (
@@ -85,7 +90,7 @@ export default function DonationCard({
             </p>
           )}
           <p className="text-xs text-slate-500 truncate">
-            from {d.donor_name}
+            {d.donor_name ? `from ${d.donor_name}` : own ? 'your listing' : 'from a donor nearby (approximate area)'}
             {distance != null && <> · <span className="font-medium text-slate-700">{formatDistance(distance)} away</span></>}
           </p>
           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
@@ -94,7 +99,7 @@ export default function DonationCard({
               <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800">⚠️ May contain {d.allergens.join(', ')}</span>
             )}
             {d.ai_assisted && <span className="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700">🤖 AI-read photo</span>}
-            {!mine && <ReachBadge donation={d} config={config} now={now} />}
+            {!mine && d.status !== 'claimed' && <ReachBadge donation={d} config={config} now={now} />}
           </div>
         </div>
       </div>
@@ -149,6 +154,26 @@ export default function DonationCard({
         </div>
       )}
       {mine && <ConfirmPickup onConfirm={(file) => onConfirm(d, file)} />}
+
+      {own &&
+        (d.status === 'claimed' ? (
+          <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
+            ✔️ Claimed by {d.claimer_name ?? 'someone'}, they're coming
+          </p>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation()
+              onTakeDown(d)
+            }}
+            className="mt-3 w-full rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-60
+              text-slate-700 font-semibold py-2.5 transition"
+          >
+            {busy ? 'Taking down…' : `🗑️ Take down: already gone`}
+          </button>
+        ))}
     </div>
   )
 }

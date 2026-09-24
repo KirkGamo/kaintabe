@@ -22,6 +22,8 @@ async function request(path, init = {}) {
 }
 
 export const getMe = () => request('/api/me', { method: 'GET' })
+export const getRoleMap = () => request('/api/map', { method: 'GET' })
+export const withdrawListing = (donationId) => request(`/api/listings/${donationId}/withdraw`)
 export const getConfig = () => request('/api/config', { method: 'GET' })
 
 export const claimDonation = (donationId, recipientId) =>
