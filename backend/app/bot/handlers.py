@@ -768,6 +768,59 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return END
 
 
+DEMO_ROLES = {
+    "donor": ("donor", "Send a photo to share food."),
+    "org": ("partner org", "Food posted within your radius sends you an alert. 🗺️ Map shows your pickups."),
+    "individual": ("individual", "Flash offers arrive when food near you isn't taken by any kitchen."),
+}
+
+
+async def demo_switch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner-only stage helper: one Telegram account plays one role at a time.
+
+    /demo donor|org|individual  keep only that role (others parked, restorable)
+    /demo fresh                 park every role: /start then behaves like a brand-new user
+    /demo all                   bring every parked role back
+    """
+    chat_id = update.effective_chat.id
+    if chat_id not in settings.demo_admins:
+        await update.effective_message.reply_text("Sorry, I don't know that command. Send /start to begin.")
+        return END
+    context.user_data.clear()  # drop any half-finished draft; this also ends the current conversation
+    bot = context.bot.username
+    arg = (context.args[0].lower() if context.args else "")
+
+    if arg in DEMO_ROLES:
+        await asyncio.to_thread(repo.park_roles, chat_id, bot, [k for k in repo.ROLE_KINDS if k != arg])
+        row = await asyncio.to_thread(repo.restore_role, chat_id, bot, arg)
+        label, hint = DEMO_ROLES[arg]
+        if row and arg == "individual":
+            await asyncio.to_thread(repo.set_individual_active, chat_id, bot, True)
+        text = (f"🎭 *Demo:* you're now only the {label} *{md(row['name'])}*.\n\n{hint}" if row else
+                f"🎭 *Demo:* other roles set aside. You have no {label} profile yet: send /start to register one.")
+    elif arg == "fresh":
+        await asyncio.to_thread(repo.park_roles, chat_id, bot, repo.ROLE_KINDS)
+        text = "🎭 *Demo:* every role set aside. You're a brand-new user now: send /start."
+    elif arg == "all":
+        for kind in repo.ROLE_KINDS:
+            await asyncio.to_thread(repo.restore_role, chat_id, bot, kind)
+        text = "🎭 *Demo:* all your roles are back."
+    else:
+        text = ("🎭 *Demo role switch*\n\n"
+                "/demo donor · /demo org · /demo individual: play only that role\n"
+                "/demo fresh: start over as a new user\n"
+                "/demo all: bring every role back")
+
+    roles = await asyncio.to_thread(repo.role_summary, chat_id, bot)
+    lines = [f"{'✅' if r['active'] else '▫️'} {kind}: {md(r['active'] or '-')}"
+             + (f" (set aside: {md(', '.join(r['parked']))})" if r["parked"] else "")
+             for kind, r in roles.items()]
+    await update.effective_message.reply_text(
+        text + "\n\n" + "\n".join(lines), parse_mode="Markdown", reply_markup=ReplyKeyboardRemove()
+    )
+    return END
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.effective_message.reply_text(
@@ -963,7 +1016,8 @@ def build_application(token: str, request=None, persistence=None) -> Application
     app = builder.build()
     persistent = persistence is not None
     text = filters.TEXT & ~filters.COMMAND
-    fallbacks = [CommandHandler("cancel", cancel)]
+    # /demo mid-conversation must end it too, or the old draft would keep answering
+    fallbacks = [CommandHandler("cancel", cancel), CommandHandler("demo", demo_switch)]
 
     onboarding = ConversationHandler(
         entry_points=[
@@ -1030,6 +1084,7 @@ def build_application(token: str, request=None, persistence=None) -> Application
     app.add_handler(CommandHandler("mylistings", my_listings))
     app.add_handler(CallbackQueryHandler(mark_gone, pattern=r"^gone:"))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("demo", demo_switch))
     app.add_handler(CallbackQueryHandler(stale_button))
     app.add_handler(MessageHandler(text, unexpected_text))
     app.add_error_handler(on_error)

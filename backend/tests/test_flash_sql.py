@@ -69,3 +69,15 @@ def test_counts_multiple_people(conn):
     d = escalated(conn)
     assert len(offers(conn)) == 2
     assert conn.execute("select flash_offer_count from donations where id = %s", (d,)).fetchone()["flash_offer_count"] == 2
+
+
+def test_not_offered_own_food(conn):
+    """Someone who is both a donor and on the flash list never gets their own listing."""
+    donor = conn.execute(
+        "insert into donors (name, type, lat, lng, telegram_chat_id) values ('Self', 'household', 10.73, 122.56, -880009) "
+        "returning id"
+    ).fetchone()["id"]
+    individual(conn, 10.7300, 122.5600, chat=-880009)
+    other = individual(conn, 10.7300, 122.5600, chat=-880010)
+    escalated(conn, donor_id=donor, donor_name="Self")
+    assert [o["recipient_id"] for o in offers(conn)] == [other]
