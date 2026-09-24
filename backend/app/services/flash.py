@@ -10,7 +10,6 @@ from app.services.notify import md
 
 log = logging.getLogger(__name__)
 
-INTERVAL_S = 15  # same cadence as the pg_cron tick that escalates listings
 
 
 def offer_text(o: dict) -> str:
@@ -47,10 +46,3 @@ async def send_pending(bot) -> int:
     return sent
 
 
-async def run_forever(bot) -> None:
-    while True:
-        try:
-            await send_pending(bot)
-        except Exception:  # noqa: BLE001 - e.g. DB unreachable; try again next tick
-            log.exception("flash offer round failed")
-        await asyncio.sleep(INTERVAL_S)
