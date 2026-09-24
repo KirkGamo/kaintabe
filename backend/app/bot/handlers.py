@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 
 # Onboarding states
-ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE, IND_LOCATION = range(6)
+ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE, IND_LOCATION, IND_NAME = range(7)
 # Partner-org sign-up states
 ORG_PICK, ORG_NAME, ORG_KIND, ORG_LOCATION, ORG_RADIUS, ORG_HOURS, ORG_CAPACITY = range(30, 37)
 
@@ -190,8 +190,12 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "I'll message you. It's free, and the first person to tap gets it.",
             parse_mode="Markdown",
         )
-        await ask_location(update, "Where should offers be near? (Within about 3 km of this spot.)")
-        return IND_LOCATION
+        tg_name = telegram_first_name(update)
+        await update.effective_message.reply_text(
+            "What name should the donor see when you come to pick up?",
+            reply_markup=buttons([[(f'Use "{tg_name}"', "indname:tg")]]) if tg_name else None,
+        )
+        return IND_NAME
     await answer_choice(update, "I have food to share")
     await update.effective_message.reply_text(
         "Great! Let's set up your donor profile (takes 30 seconds).\n\n"
@@ -324,10 +328,27 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return NAME
 
 
+def telegram_first_name(update: Update) -> str | None:
+    user = getattr(update, "effective_user", None)
+    name = (getattr(user, "first_name", None) or "").strip()[:40]
+    return name or None
+
+
+async def got_individual_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query:  # "Use <Telegram name>"
+        name = telegram_first_name(update) or "Neighbor"
+        await answer_choice(update, name)
+    else:
+        name = update.effective_message.text.strip()[:40]
+    context.user_data["ind_name"] = name
+    await ask_location(update, "Where should offers be near? (Within about 3 km of this spot.)")
+    return IND_LOCATION
+
+
 async def got_individual_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     loc = update.effective_message.location
-    user = getattr(update, "effective_user", None)
-    name = (getattr(user, "first_name", None) or "Neighbor")[:40]
+    # the name step normally sets this; a flow started before it existed falls back to Telegram's name
+    name = context.user_data.pop("ind_name", None) or telegram_first_name(update) or "Neighbor"
     await asyncio.to_thread(
         repo.upsert_individual, update.effective_chat.id, name, loc.latitude, loc.longitude, context.bot.username
     )
@@ -1042,6 +1063,8 @@ def build_application(token: str, request=None, persistence=None) -> Application
             ORG_RADIUS: [CallbackQueryHandler(chose_org_radius, pattern=r"^orad:")],
             ORG_HOURS: [MessageHandler(text, got_org_hours)],
             ORG_CAPACITY: [MessageHandler(text, got_org_capacity)],
+            IND_NAME: [MessageHandler(text, got_individual_name),
+                       CallbackQueryHandler(got_individual_name, pattern=r"^indname:tg$")],
             IND_LOCATION: [
                 MessageHandler(filters.LOCATION, got_individual_location),
                 MessageHandler(text, location_expected),

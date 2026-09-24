@@ -96,8 +96,10 @@ def escalated_listing():
                                lat=10.7250, lng=122.5575, radius_m=8000, status="escalated")
 
 
-def opt_in(chat, location=NEAR_JARO):
-    return [msg(chat, "/start"), tap(chat, "role:recipient"), msg(chat, location=location)]
+def opt_in(chat, location=NEAR_JARO, name=None):
+    """Join the flash list; `name` is typed, otherwise the Telegram first name is taken with one tap."""
+    named = msg(chat, name) if name else tap(chat, "indname:tg")
+    return [msg(chat, "/start"), tap(chat, "role:recipient"), named, msg(chat, location=location)]
 
 
 def test_full_flash_flow(mocks):
@@ -105,7 +107,7 @@ def test_full_flash_flow(mocks):
 
     async def go():
         async with Harness() as bot:
-            await bot.send(*opt_in(A), *opt_in(B))
+            await bot.send(*opt_in(A, name="Ana Typed"), *opt_in(B))
             assert any("on the list" in t for t in bot.texts_to(A))
 
             d = escalated_listing()
@@ -120,6 +122,7 @@ def test_full_flash_flow(mocks):
             assert any("got this one first" in t for t in bot.texts_to(B))
             donor_msg.assert_awaited_once()
             assert "Claimed" in donor_msg.await_args.args[1]
+            assert "Ana Typed" in donor_msg.await_args.args[1]  # the name A chose, not the Telegram one
 
             # A sends the pickup photo -> confirmed, donor thanked, counts as completed
             await bot.send(msg(A, photo=True))

@@ -147,7 +147,7 @@ def test_donor_notifications_carry_map_button():
 
 def test_individual_on_flash_list_can_also_register_an_org():
     """Regression: the same Telegram account may be an individual AND an org rep (was a unique-index crash)."""
-    run(msg(A, "/start"), tap(A, "role:recipient"), msg(A, location=(10.7300, 122.5600)))  # joins flash list
+    run(msg(A, "/start"), tap(A, "role:recipient"), tap(A, "indname:tg"), msg(A, location=(10.7300, 122.5600)))  # joins flash list
     fake = run(msg(A, "/start"), tap(A, "role:org"), tap(A, "orglink:new"), msg(A, "Jaro Youth Kitchen"),
                tap(A, "okind:pantry"), msg(A, location=(10.7245, 122.5570)), tap(A, "orad:3"),
                msg(A, "24 hours"), msg(A, "40 meals/day"))
@@ -166,7 +166,7 @@ def all_three_roles(chat):
     with db.connect() as conn:
         conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) "
                      "values ('Test Lugawan', 'business', 10.729, 122.5576, %s, now())", (chat,))
-    run(msg(chat, "/start"), tap(chat, "role:recipient"), msg(chat, location=(10.7300, 122.5600)))
+    run(msg(chat, "/start"), tap(chat, "role:recipient"), tap(chat, "indname:tg"), msg(chat, location=(10.7300, 122.5600)))
     run(msg(chat, "/start"), tap(chat, "role:org"), tap(chat, f"orglink:{JARO}"))
 
 

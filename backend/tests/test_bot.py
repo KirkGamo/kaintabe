@@ -137,13 +137,18 @@ def test_onboarding_creates_donor():
     assert keyboard[0][0].callback_data == "role:recipient"
 
 
-def test_recipient_role_asks_location_for_flash_offers():
+def test_recipient_role_asks_name_then_location_for_flash_offers():
     ctx = make_context()
     run(h.start(update_msg(text="/start"), ctx))
     u = update_tap("role:recipient")
-    assert run(h.chose_role(u, ctx)) == h.IND_LOCATION
+    assert run(h.chose_role(u, ctx)) == h.IND_NAME
     replies = [c.args[0] for c in u.effective_message.reply_text.call_args_list]
     assert any("Flash offers" in r for r in replies)
+    assert "name should the donor see" in replies[-1]
+
+    u = update_msg(text="  Ana from Molo  ")
+    assert run(h.got_individual_name(u, ctx)) == h.IND_LOCATION
+    assert ctx.user_data["ind_name"] == "Ana from Molo"
 
 
 def test_photo_before_onboarding_asks_for_start():
