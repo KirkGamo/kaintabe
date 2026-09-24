@@ -370,6 +370,33 @@ def donor_listings(donor_id) -> list[dict]:
         ).fetchall()
 
 
+# --- numbers for the /start welcome ------------------------------------------------------
+
+def community_stats() -> dict:
+    """Totals as on the Impact tab (confirmed pickups, incl. sample history) + listings open right now."""
+    with db.connect() as conn:
+        s = conn.execute("select impact_summary(7) s").fetchone()["s"]
+        live = conn.execute(
+            "select count(*) n from donations where status in ('posted', 'escalated') and expires_at > now()"
+        ).fetchone()["n"]
+    return {"kg": float(s["kg_rescued"]), "meals": int(s["meals"]), "co2e_kg": float(s["co2e_kg"]), "live": live}
+
+
+def rescued_stats(*, donor_id=None, recipient_id=None) -> dict:
+    """Confirmed pickups (and kg) of one donor's food, or picked up by one recipient."""
+    column, value = ("d.donor_id", donor_id) if donor_id is not None else ("c.recipient_id", recipient_id)
+    with db.connect() as conn:
+        row = conn.execute(
+            f"""
+            select count(*) pickups, coalesce(sum(d.est_kg), 0) kg
+              from claims c join donations d on d.id = c.donation_id
+             where c.confirmed_at is not null and d.status in ('completed', 'sold') and {column} = %s
+            """,
+            (value,),
+        ).fetchone()
+    return {"pickups": row["pickups"], "kg": float(row["kg"])}
+
+
 # --- demo role switch (owner-only /demo) ----------------------------------------------
 # A parked role keeps its row; only the chat link is removed (and remembered in demo_parked).
 

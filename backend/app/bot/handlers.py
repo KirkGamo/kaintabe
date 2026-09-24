@@ -132,19 +132,48 @@ async def answer_choice(update: Update, chosen_label: str) -> None:
 # Onboarding
 # ---------------------------------------------------------------------------
 
+def rescued_line(label: str, stats: dict) -> str | None:
+    """'💚 Your impact: 5 pickups · 12 kg ≈ 30 meals', or None before the first pickup."""
+    n, kg = stats["pickups"], stats["kg"]
+    if not n:
+        return None
+    line = f"💚 {label}: {n} pickup{'' if n == 1 else 's'}"
+    if kg:
+        meals = max(1, round(kg / notify.KG_PER_MEAL))
+        line += f" · {kg:g} kg ≈ {meals} meal{'' if meals == 1 else 's'}"
+    return line
+
+
+def lines(*parts: str | None) -> str:
+    """Join message lines, leaving out the ones with nothing to report."""
+    return "\n".join(p for p in parts if p)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    org = await asyncio.to_thread(repo.get_org, update.effective_chat.id, context.bot.username)
+    chat_id, bot = update.effective_chat.id, context.bot.username
+    org, donor, person = await asyncio.gather(
+        asyncio.to_thread(repo.get_org, chat_id, bot),
+        asyncio.to_thread(repo.get_donor_by_chat, chat_id),
+        asyncio.to_thread(repo.get_individual, chat_id, bot),
+    )
     if org:
-        await reply_org_welcome(update, org, returning=True)
+        await reply_org_welcome(update, org, returning=True, is_donor=bool(donor))
         return END
-    donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    on_list = bool(person and person["active"])
     if donor:
-        person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
-        on_list = bool(person and person["active"])
+        stats, live = await asyncio.gather(
+            asyncio.to_thread(repo.rescued_stats, donor_id=donor["id"]),
+            asyncio.to_thread(repo.my_active_listings, donor["id"]),
+        )
+        body = lines(
+            rescued_line("Your impact", stats),
+            f"📦 Live now: {len(live)} listing{'' if len(live) == 1 else 's'} "
+            "(/mylistings to see or take them down)" if live else None,
+        )
         await update.effective_message.reply_text(
             f"Welcome back, {md(donor['name'])}! 👋\n\n"
-            "To share food, just *send a photo* of it here.\n"
-            "/mylistings to see or take down what you posted · /profile to update your details."
+            + (f"{body}\n\n" if body else "")
+            + "📸 Have surplus? Just *send a photo* of it.\n/profile to update your details."
             + ("\n\n💚 You're also on the flash-offer list (/stop to leave)." if on_list else ""),
             parse_mode="Markdown",
             # donors can also receive flash offers; the button re-enters the recipient branch
@@ -152,14 +181,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             else buttons([[("🙋 Get free-food offers near me", "role:recipient")]], with_map=True),
         )
         return END if on_list else ROLE
+    if person:
+        stats = await asyncio.to_thread(repo.rescued_stats, recipient_id=person["id"])
+        n = stats["pickups"]
+        so_far = f" {n} pickup{'' if n == 1 else 's'} so far." if n else ""
+        if on_list:
+            text = ("You're on the flash-offer list. I'll message you when free food near you would otherwise "
+                    f"go to waste.{so_far}\n/stop to pause offers.")
+            markup = map_only()
+        else:
+            text = f"Your flash offers are paused.{so_far} Turn them back on anytime:"
+            markup = buttons([[("🙋 Turn offers back on", "role:recipient")]], with_map=True)
+        await update.effective_message.reply_text(
+            f"Welcome back, {md(person['name'])}! 💚\n\n{text}", parse_mode="Markdown", reply_markup=markup
+        )
+        return END
     return await ask_role(update, context)
 
 
 async def ask_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("editing", None)  # a fresh onboarding, not a profile edit
+    try:
+        s = await asyncio.to_thread(repo.community_stats)
+    except Exception:  # the numbers are a nice-to-have; never block sign-up on them
+        log.warning("community stats unavailable", exc_info=True)
+        s = {"kg": 0, "live": 0}
+    live = s["live"]
+    numbers = lines(
+        f"💚 So far: {s['kg']:g} kg rescued · ≈ {s['meals']} meals · {s['co2e_kg']:g} kg CO₂e avoided"
+        if s["kg"] else None,
+        f"📍 Right now: {live} listing{'' if live == 1 else 's'} on the map" if live else None,
+    )
     await update.effective_message.reply_text(
-        "🍱 *KainTabe — food rescue*\n\n"
-        "Surplus food gets matched to nearby community kitchens before it spoils.\n\n"
+        "🍱 *KainTabe: food rescue for Iloilo*\n\n"
+        "Surplus food from restaurants, bakeries and homes reaches community kitchens and neighbors "
+        "before it spoils.\n\n"
+        + (f"{numbers}\n\n" if numbers else "")
+        + "*How it works*\n"
+        "1️⃣ A donor sends a photo of surplus food\n"
+        "2️⃣ The nearest kitchen gets an alert and claims it\n"
+        "3️⃣ Pickup is confirmed with a photo\n\n"
         "What brings you here?",
         parse_mode="Markdown",
         reply_markup=buttons(
@@ -208,14 +269,31 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Partner organizations: link a seeded org or register a new one (self-declared)
 # ---------------------------------------------------------------------------
 
-async def reply_org_welcome(update: Update, org: dict, returning: bool = False) -> None:
+async def reply_org_welcome(update: Update, org: dict, returning: bool = False, is_donor: bool | None = None) -> None:
     status = ("🕓 Pending review (self-declared; you can already claim food)"
               if org["review_status"] == "pending_review" else "✅ Verified partner")
     head = f"Welcome back, *{md(org['name'])}*! 🏢" if returning else f"✅ *You're set up as {md(org['name'])}*"
-    is_donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    if is_donor is None:
+        is_donor = bool(await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id))
+    km = f"{org['service_radius_m'] / 1000:g} km"
+    now = ""
+    if returning:  # what's waiting for them right now
+        near, pending, stats = await asyncio.gather(
+            asyncio.to_thread(repo.listings_in_range, org["id"]),
+            asyncio.to_thread(repo.pending_pickups, [org["id"]]),
+            asyncio.to_thread(repo.rescued_stats, recipient_id=org["id"]),
+        )
+        now = lines(
+            f"🍲 Near you now: {len(near)} listing{'' if len(near) == 1 else 's'} within {km}" if near else None,
+            f"🚚 Waiting for your pickup: {md(pending[0]['food_type'])}"
+            + (f" and {len(pending) - 1} more" if len(pending) > 1 else "")
+            + " (send a photo when you have it)" if pending else None,
+            rescued_line("Rescued by you so far", stats),
+        )
     await update.effective_message.reply_text(
         f"{head}\n\nStatus: {status}\n\n"
-        f"I'll alert you when surplus food appears within *{org['service_radius_m'] / 1000:g} km*, "
+        + (f"{now}\n\n" if now else "")
+        + f"I'll alert you when surplus food appears within *{km}*, "
         "and you can claim it in one tap. Open the map anytime with the 🗺️ button."
         + ("\n\n🍱 You're also a donor: send a photo anytime to share food." if is_donor else ""),
         parse_mode="Markdown",
