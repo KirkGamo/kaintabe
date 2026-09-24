@@ -1,4 +1,4 @@
--- 017: privacy, part 2 - apply only AFTER the web app that reads public_listings / /api/map is live.
+-- 018: privacy, part 2 - apply only AFTER the web app that reads public_listings / /api/map is live.
 -- The browser (anon key) can no longer read exact donation locations, donor names, claims,
 -- or individuals' home locations. Exact details reach the right people only via /api/map.
 

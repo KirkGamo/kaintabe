@@ -191,7 +191,8 @@ def pending_pickup(recipient_id) -> dict | None:
         return conn.execute(
             """
             select c.id, d.food_type from claims c join donations d on d.id = c.donation_id
-             where c.recipient_id = %s and c.confirmed_at is null and c.claimed_at > now() - interval '24 hours'
+             where c.recipient_id = %s and c.confirmed_at is null and d.status = 'claimed'
+               and c.claimed_at > now() - interval '24 hours'
              order by c.claimed_at desc limit 1
             """,
             (recipient_id,),
@@ -304,7 +305,8 @@ def pending_pickup_for_chat(chat_id: int, via_bot: str) -> dict | None:
               join donations d on d.id = c.donation_id
               join recipients r on r.id = c.recipient_id
              where r.telegram_chat_id = %s and r.via_bot = %s
-               and c.confirmed_at is null and c.claimed_at > now() - interval '24 hours'
+               and c.confirmed_at is null and d.status = 'claimed'  -- not once the listing closed
+               and c.claimed_at > now() - interval '24 hours'
              order by c.claimed_at desc limit 1
             """,
             (chat_id, via_bot),

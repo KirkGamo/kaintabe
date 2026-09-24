@@ -122,7 +122,7 @@ def test_donor_can_take_down_own_unclaimed_listing(world):
 
 def _lockdown_applied() -> bool:
     with db.connect() as conn:
-        return conn.execute("select 1 from schema_migrations where name = '017_privacy_lockdown.sql'").fetchone() is not None
+        return conn.execute("select 1 from schema_migrations where name = '018_privacy_lockdown.sql'").fetchone() is not None
 
 
 def test_public_key_reads_approximate_feed(frontend_env):
@@ -135,7 +135,7 @@ def test_public_key_reads_approximate_feed(frontend_env):
     assert httpx.post(f"{base}/rpc/nearby_donations", headers=h, json={"p_recipient_id": rows[0]["id"]}).status_code in (401, 403, 404)
 
 
-@pytest.mark.skipif(not _lockdown_applied(), reason="017 lockdown is applied at deploy time")
+@pytest.mark.skipif(not _lockdown_applied(), reason="018 lockdown is applied at deploy time")
 def test_public_key_cannot_read_exact_data(frontend_env):
     base = frontend_env["VITE_SUPABASE_URL"].rstrip("/") + "/rest/v1"
     key = frontend_env["VITE_SUPABASE_ANON_KEY"]

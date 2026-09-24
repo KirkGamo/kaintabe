@@ -3,7 +3,7 @@
 --     no donor name, no photo -> the public live map (projector, judges) and its Realtime feed
 --   * nearby_donations (exact rows for any recipient id) becomes backend-only
 --   * the impact dashboard shows individuals as "a neighbor"
--- Part 2 (017) removes anon read access to donations/claims/individuals once the new web app is live.
+-- Part 2 (018) removes anon read access to donations/claims/individuals once the new web app is live.
 
 -- ~500 m grid (0.0045 deg of latitude; longitude cells are ~1.5% narrower at Iloilo's latitude).
 -- Points are moved to the CENTER of their cell, so nearby homes share one public spot.

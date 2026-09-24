@@ -153,13 +153,26 @@ export default function DonationCard({
           </a>
         </div>
       )}
+      {mine && leftMs <= 0 && (
+        <p className="mt-2 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2">
+          ⏰ Past its safe time. Confirm only if you picked it up in time (within the hour); otherwise it closes
+          automatically.
+        </p>
+      )}
       {mine && <ConfirmPickup onConfirm={(file) => onConfirm(d, file)} />}
 
       {own &&
         (d.status === 'claimed' ? (
-          <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
-            ✔️ Claimed by {d.claimer_name ?? 'someone'}, they're coming
-          </p>
+          leftMs > 0 ? (
+            <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
+              ✔️ Claimed by {d.claimer_name ?? 'someone'}, they're coming
+            </p>
+          ) : (
+            <p className="mt-3 rounded-lg bg-slate-100 text-slate-600 text-sm py-2 px-3 text-center">
+              ⌛ Pickup window over. If {d.claimer_name ?? 'they'} didn't collect it, this closes automatically within
+              the hour.
+            </p>
+          )
         ) : (
           <button
             type="button"
