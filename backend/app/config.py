@@ -21,9 +21,18 @@ class Settings(BaseSettings):
     # comma-separated, e.g. "http://localhost:5173,https://kaintabe.vercel.app"
     frontend_origin: str = "http://localhost:5173"
 
+    # The public web app (opened as a Telegram Mini App). Defaults to the first https FRONTEND_ORIGIN.
+    web_url: str = ""
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.frontend_origin.split(",") if o.strip()]
+
+    @property
+    def map_url(self) -> str | None:
+        """HTTPS URL for 'Open map' buttons, or None (Telegram only opens https web apps)."""
+        candidates = [self.web_url.rstrip("/")] + self.cors_origins
+        return next((u for u in candidates if u.startswith("https://")), None)
 
 
 settings = Settings()

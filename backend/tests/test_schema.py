@@ -13,8 +13,12 @@ def nearby_ids(conn, recipient_id):
 
 
 def test_seed_loaded(conn):
-    orgs = conn.execute("select name from recipients where type = 'partner_org' order by name").fetchall()
-    assert len(orgs) == 3
+    # the 3 seeded pantries exist (orgs may also self-register through the bot, so don't count all of them)
+    seeded = conn.execute(
+        "select id::text from recipients where type = 'partner_org' and id = any(%s::uuid[])",
+        ([JARO, LA_PAZ, CITY_PROPER],),
+    ).fetchall()
+    assert len(seeded) == 3
 
 
 def test_nearby_respects_radius_and_orders_by_distance(conn):

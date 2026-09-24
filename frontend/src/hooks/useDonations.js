@@ -71,7 +71,7 @@ export function useRecipients() {
   useEffect(() => {
     supabase
       .from('recipients')
-      .select('id, name, type, lat, lng, capacity, hours')
+      .select('id, name, type, lat, lng, capacity, hours, org_kind, review_status')
       .eq('type', 'partner_org')
       .order('name')
       .then(({ data, error }) => {

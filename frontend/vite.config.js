@@ -4,4 +4,11 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    // Testing the Telegram Mini App locally goes through an https cloudflared quick tunnel
+    allowedHosts: ['.trycloudflare.com'],
+    // With VITE_API_URL empty, API calls are same-origin (/api/...) and forwarded to the local backend,
+    // so one tunnel serves both the page and the API
+    proxy: { '/api': 'http://127.0.0.1:8000' },  // not 'localhost': Node may resolve it to IPv6 ::1
+  },
 })

@@ -9,6 +9,8 @@ import re
 import warnings
 from datetime import datetime, timezone
 
+import httpx
+import psycopg
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -16,7 +18,9 @@ from telegram import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
+    WebAppInfo,
 )
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -27,6 +31,7 @@ from telegram.ext import (
     filters,
 )
 
+from app.config import settings
 from app.services import ai_intake, notify, repo, storage
 from app.services import telegram as tg_out  # outgoing messages to other chats (e.g. the donor)
 from app.services.notify import md
@@ -38,6 +43,12 @@ warnings.filterwarnings("ignore", message=r"If 'per_message=False'")
 
 # Onboarding states
 ROLE, NAME, DONOR_TYPE, LOCATION, PLEDGE, IND_LOCATION = range(6)
+# Partner-org sign-up states
+ORG_PICK, ORG_NAME, ORG_KIND, ORG_LOCATION, ORG_RADIUS, ORG_HOURS, ORG_CAPACITY = range(30, 37)
+
+ORG_KINDS = [("🍲 Community kitchen", "community_kitchen"), ("🏠 Shelter", "shelter"),
+             ("🏦 Food bank", "food_bank"), ("🧺 Pantry", "pantry")]
+ORG_RADII_KM = [3, 5, 8]
 # Posting states
 FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE, PHOTO_PURPOSE = range(10, 21)
 
@@ -74,8 +85,23 @@ SAFETY_CHECKLIST = [
 ]
 
 
-def buttons(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(t, callback_data=d) for t, d in row] for row in rows])
+def buttons(rows: list[list[tuple[str, str]]], with_map: bool = False) -> InlineKeyboardMarkup:
+    keyboard = [[InlineKeyboardButton(t, callback_data=d) for t, d in row] for row in rows]
+    map_button = open_map_button() if with_map else None
+    if map_button:
+        keyboard.append([map_button])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def open_map_button() -> InlineKeyboardButton | None:
+    """Opens the live map inside Telegram (Mini App). None without an https web URL."""
+    url = settings.map_url
+    return InlineKeyboardButton("🗺️ Open map", web_app=WebAppInfo(url=url)) if url else None
+
+
+def map_only() -> InlineKeyboardMarkup | None:
+    button = open_map_button()
+    return InlineKeyboardMarkup([[button]]) if button else None
 
 
 HERE_NOW = "📍 I'm there now — use my current location"
@@ -107,6 +133,10 @@ async def answer_choice(update: Update, chosen_label: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    org = await asyncio.to_thread(repo.get_org, update.effective_chat.id, context.bot.username)
+    if org:
+        await reply_org_welcome(update, org, returning=True)
+        return END
     donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
     if donor:
         person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
@@ -118,7 +148,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             + ("\n\n💚 You're also on the flash-offer list (/stop to leave)." if on_list else ""),
             parse_mode="Markdown",
             # donors can also receive flash offers; the button re-enters the recipient branch
-            reply_markup=None if on_list else buttons([[("🙋 Get free-food offers near me", "role:recipient")]]),
+            reply_markup=map_only() if on_list
+            else buttons([[("🙋 Get free-food offers near me", "role:recipient")]], with_map=True),
         )
         return END if on_list else ROLE
     return await ask_role(update, context)
@@ -131,13 +162,20 @@ async def ask_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Surplus food gets matched to nearby community kitchens before it spoils.\n\n"
         "What brings you here?",
         parse_mode="Markdown",
-        reply_markup=buttons([[("I have food to share", "role:donor")], [("I need food", "role:recipient")]]),
+        reply_markup=buttons(
+            [[("🍱 I have food to share", "role:donor")],
+             [("🏢 We're a community kitchen / org", "role:org")],
+             [("🙋 I need food", "role:recipient")]],
+            with_map=True,
+        ),
     )
     return ROLE
 
 
 async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     role = update.callback_query.data.split(":")[1]
+    if role == "org":
+        return await org_start(update, context)
     if role == "recipient":
         await answer_choice(update, "I need food")
         person = await asyncio.to_thread(repo.get_individual, update.effective_chat.id, context.bot.username)
@@ -160,6 +198,113 @@ async def chose_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "What name should recipients see? (e.g. your business or \"Household in Jaro\")"
     )
     return NAME
+
+
+# ---------------------------------------------------------------------------
+# Partner organizations: link a seeded org or register a new one (self-declared)
+# ---------------------------------------------------------------------------
+
+async def reply_org_welcome(update: Update, org: dict, returning: bool = False) -> None:
+    status = ("🕓 Pending review (self-declared; you can already claim food)"
+              if org["review_status"] == "pending_review" else "✅ Verified partner")
+    head = f"Welcome back, *{md(org['name'])}*! 🏢" if returning else f"✅ *You're set up as {md(org['name'])}*"
+    is_donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
+    await update.effective_message.reply_text(
+        f"{head}\n\nStatus: {status}\n\n"
+        f"I'll alert you when surplus food appears within *{org['service_radius_m'] / 1000:g} km*, "
+        "and you can claim it in one tap. Open the map anytime with the 🗺️ button."
+        + ("\n\n🍱 You're also a donor: send a photo anytime to share food." if is_donor else ""),
+        parse_mode="Markdown",
+        # an org's staff may have their own surplus too; don't make donating a dead end
+        reply_markup=map_only() if is_donor else buttons([[("🍱 I also have food to share", "role:donor")]], with_map=True),
+    )
+
+
+async def org_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await answer_choice(update, "We're an organization")
+    orgs = await asyncio.to_thread(repo.unlinked_orgs)
+    rows = [[(f"🔗 {o['name']}", f"orglink:{o['id']}")] for o in orgs]
+    rows.append([("➕ Register a new organization", "orglink:new")])
+    await update.effective_message.reply_text(
+        "🏢 *Partner organizations* get an alert when surplus food appears nearby and claim it in one tap.\n\n"
+        + ("Is your organization already listed? Link it, or register a new one:" if orgs
+           else "Let's register your organization:"),
+        parse_mode="Markdown",
+        reply_markup=buttons(rows),
+    )
+    return ORG_PICK
+
+
+async def org_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = update.callback_query.data.split(":", 1)[1]
+    if choice == "new":
+        await answer_choice(update, "Register a new organization")
+        context.user_data["org"] = {}
+        await update.effective_message.reply_text("What's the organization's name?")
+        return ORG_NAME
+    try:
+        org = await asyncio.to_thread(repo.link_org, choice, update.effective_chat.id, context.bot.username)
+    except repo.NotAvailable:
+        await update.callback_query.answer("Someone already linked that organization.", show_alert=True)
+        return None  # stay: they can pick another or register new
+    await answer_choice(update, f"Linked: {org['name']}")
+    await reply_org_welcome(update, org)
+    return END
+
+
+async def got_org_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["org"] = {"name": update.effective_message.text.strip()[:80]}
+    await update.effective_message.reply_text(
+        "What kind of organization is it?",
+        reply_markup=buttons([[(label, f"okind:{kind}")] for label, kind in ORG_KINDS]),
+    )
+    return ORG_KIND
+
+
+async def chose_org_kind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    kind = update.callback_query.data.split(":", 1)[1]
+    context.user_data["org"]["org_kind"] = kind
+    await answer_choice(update, dict((k, label) for label, k in ORG_KINDS)[kind])
+    await ask_location(update, "Where do you receive or pick up food from? (Your kitchen or pantry.)")
+    return ORG_LOCATION
+
+
+async def got_org_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    loc = update.effective_message.location
+    context.user_data["org"].update(lat=loc.latitude, lng=loc.longitude)
+    await update.effective_message.reply_text("📍 Got it.", reply_markup=ReplyKeyboardRemove())
+    await update.effective_message.reply_text(
+        "How far can you travel to pick food up?",
+        reply_markup=buttons([[(f"{km} km", f"orad:{km}") for km in ORG_RADII_KM]]),
+    )
+    return ORG_RADIUS
+
+
+async def chose_org_radius(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    km = int(update.callback_query.data.split(":", 1)[1])
+    context.user_data["org"]["service_radius_m"] = km * 1000
+    await answer_choice(update, f"{km} km")
+    await update.effective_message.reply_text("What are your operating hours? (e.g. \"7:00–20:00\" or \"24 hours\")")
+    return ORG_HOURS
+
+
+async def got_org_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["org"]["hours"] = update.effective_message.text.strip()[:60]
+    await update.effective_message.reply_text("Roughly how many meals can you take in a day? (e.g. \"60 meals/day\")")
+    return ORG_CAPACITY
+
+
+async def got_org_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    o = context.user_data["org"]  # keep the answers until the save succeeds, so a retry works
+    org = await asyncio.to_thread(
+        repo.create_org, update.effective_chat.id, context.bot.username,
+        name=o["name"], org_kind=o["org_kind"], lat=o["lat"], lng=o["lng"],
+        service_radius_m=o["service_radius_m"], hours=o["hours"],
+        capacity=update.effective_message.text.strip()[:60],
+    )
+    context.user_data.pop("org", None)
+    await reply_org_welcome(update, org)
+    return END
 
 
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -271,6 +416,7 @@ async def pledged(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "with a countdown — the nearest one claims it and comes to pick it up.\n\n"
         "Try it now: send a photo 📸",
         parse_mode="Markdown",
+        reply_markup=map_only(),
     )
     return END
 
@@ -287,7 +433,10 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     person = await asyncio.to_thread(repo.get_individual, chat_id, context.bot.username)
     pending = await asyncio.to_thread(repo.pending_pickup, person["id"]) if person else None
     if not donor and not pending:
-        await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
+        await msg.reply_text(
+            "📸 To share food, set up a donor profile first (takes 30 seconds), then send the photo again.",
+            reply_markup=buttons([[("🍱 Set up a donor profile", "role:donor")]]),
+        )
         return END
 
     # Keep only Telegram's file id (JSON-safe, survives restarts); download the bytes when needed
@@ -613,6 +762,7 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"✅ *Live now!* {md(draft['food_type'])} ({md(draft['quantity'])})\n\n"
         f"{details} ⏱ Good for {draft['good_for_hours']} hrs.",
         parse_mode="Markdown",
+        reply_markup=map_only(),
     )
     return END
 
@@ -752,11 +902,16 @@ async def unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("bot handler failed", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(
-            "😕 Something went wrong on our side (probably a connection hiccup).\n\n"
-            "If you were posting food, just send the photo again to start over. "
-            "Otherwise, send /start."
-        )
+        # Only blame the connection when it actually was one; a bug shouldn't read as "try again later"
+        network = isinstance(context.error, (NetworkError, psycopg.OperationalError, httpx.HTTPError))
+        reason = "a connection hiccup, please try again" if network else "our mistake, and it's been logged"
+        try:
+            await update.effective_message.reply_text(
+                f"😕 Something went wrong on our side ({reason}).\n\n"
+                "If you were posting food, just send the photo again to start over. Otherwise, send /start."
+            )
+        except Exception:  # noqa: BLE001 - e.g. Telegram itself unreachable; the log has the details
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +933,12 @@ def build_application(token: str, request=None, persistence=None) -> Application
     fallbacks = [CommandHandler("cancel", cancel)]
 
     onboarding = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CommandHandler("profile", edit_profile)],
+        entry_points=[
+            CommandHandler("start", start),
+            CommandHandler("profile", edit_profile),
+            # role buttons (e.g. "I also have food to share") start their branch even outside a conversation
+            CallbackQueryHandler(chose_role, pattern=r"^role:"),
+        ],
         states={
             ROLE: [CallbackQueryHandler(chose_role, pattern=r"^role:")],
             NAME: [MessageHandler(text, got_name), CallbackQueryHandler(got_name, pattern=r"^keep:name$")],
@@ -789,6 +949,13 @@ def build_application(token: str, request=None, persistence=None) -> Application
                 MessageHandler(text, location_expected),
             ],
             PLEDGE: [CallbackQueryHandler(pledged, pattern=r"^pledge:")],
+            ORG_PICK: [CallbackQueryHandler(org_picked, pattern=r"^orglink:")],
+            ORG_NAME: [MessageHandler(text, got_org_name)],
+            ORG_KIND: [CallbackQueryHandler(chose_org_kind, pattern=r"^okind:")],
+            ORG_LOCATION: [MessageHandler(filters.LOCATION, got_org_location), MessageHandler(text, location_expected)],
+            ORG_RADIUS: [CallbackQueryHandler(chose_org_radius, pattern=r"^orad:")],
+            ORG_HOURS: [MessageHandler(text, got_org_hours)],
+            ORG_CAPACITY: [MessageHandler(text, got_org_capacity)],
             IND_LOCATION: [
                 MessageHandler(filters.LOCATION, got_individual_location),
                 MessageHandler(text, location_expected),

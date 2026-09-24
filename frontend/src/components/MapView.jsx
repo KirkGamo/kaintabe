@@ -47,8 +47,14 @@ export default function MapView({ items, recipients, viewer, selected, onSelect,
         >
           <Popup>
             <strong>{r.name}</strong>
+            {r.review_status === 'pending_review' && (
+              <>
+                <br />
+                <span style={{ color: '#b45309' }}>🕓 Pending review (self-declared)</span>
+              </>
+            )}
             <br />
-            {r.capacity} · {r.hours}
+            {[r.capacity, r.hours].filter(Boolean).join(' · ')}
           </Popup>
         </Marker>
       ))}
