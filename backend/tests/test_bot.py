@@ -149,7 +149,9 @@ def test_recipient_role_asks_location_for_flash_offers():
 def test_photo_before_onboarding_asks_for_start():
     u = update_msg(photo=True)
     assert run(h.got_photo(u, make_context())) == h.END
-    assert "/start" in last_reply(u)
+    assert "set up a donor profile" in last_reply(u)
+    keyboard = u.effective_message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert keyboard[0][0].callback_data == "role:donor"  # one tap into donor sign-up, not a /start loop
 
 
 @patch.object(h.storage, "upload_photo", new_callable=AsyncMock, return_value="https://example.com/photo.jpg")

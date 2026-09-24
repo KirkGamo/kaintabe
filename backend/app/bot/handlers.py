@@ -208,12 +208,15 @@ async def reply_org_welcome(update: Update, org: dict, returning: bool = False) 
     status = ("🕓 Pending review (self-declared; you can already claim food)"
               if org["review_status"] == "pending_review" else "✅ Verified partner")
     head = f"Welcome back, *{md(org['name'])}*! 🏢" if returning else f"✅ *You're set up as {md(org['name'])}*"
+    is_donor = await asyncio.to_thread(repo.get_donor_by_chat, update.effective_chat.id)
     await update.effective_message.reply_text(
         f"{head}\n\nStatus: {status}\n\n"
         f"I'll alert you when surplus food appears within *{org['service_radius_m'] / 1000:g} km*, "
-        "and you can claim it in one tap. Open the map anytime with the 🗺️ button.",
+        "and you can claim it in one tap. Open the map anytime with the 🗺️ button."
+        + ("\n\n🍱 You're also a donor: send a photo anytime to share food." if is_donor else ""),
         parse_mode="Markdown",
-        reply_markup=map_only(),
+        # an org's staff may have their own surplus too; don't make donating a dead end
+        reply_markup=map_only() if is_donor else buttons([[("🍱 I also have food to share", "role:donor")]], with_map=True),
     )
 
 
@@ -430,7 +433,10 @@ async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     person = await asyncio.to_thread(repo.get_individual, chat_id, context.bot.username)
     pending = await asyncio.to_thread(repo.pending_pickup, person["id"]) if person else None
     if not donor and not pending:
-        await msg.reply_text("Welcome! Let's set up your donor profile first — send /start.")
+        await msg.reply_text(
+            "📸 To share food, set up a donor profile first (takes 30 seconds), then send the photo again.",
+            reply_markup=buttons([[("🍱 Set up a donor profile", "role:donor")]]),
+        )
         return END
 
     # Keep only Telegram's file id (JSON-safe, survives restarts); download the bytes when needed
@@ -927,7 +933,12 @@ def build_application(token: str, request=None, persistence=None) -> Application
     fallbacks = [CommandHandler("cancel", cancel)]
 
     onboarding = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CommandHandler("profile", edit_profile)],
+        entry_points=[
+            CommandHandler("start", start),
+            CommandHandler("profile", edit_profile),
+            # role buttons (e.g. "I also have food to share") start their branch even outside a conversation
+            CallbackQueryHandler(chose_role, pattern=r"^role:"),
+        ],
         states={
             ROLE: [CallbackQueryHandler(chose_role, pattern=r"^role:")],
             NAME: [MessageHandler(text, got_name), CallbackQueryHandler(got_name, pattern=r"^keep:name$")],
