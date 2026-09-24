@@ -59,6 +59,18 @@ def test_widening_into_range_alerts_then(conn):
     assert [a["donation_id"] for a in alerts(conn)] == [d]
 
 
+
+def test_own_food_not_alerted(conn):
+    """A donor who also runs an org isn't alerted about their own listing; other orgs still are."""
+    donor = conn.execute(
+        "insert into donors (name, type, lat, lng, telegram_chat_id) values ('Self', 'business', 10.73, 122.56, %s) "
+        "returning id", (O1,)
+    ).fetchone()["id"]
+    org(conn, O1, 10.7300, 122.5600)
+    other = org(conn, O2, 10.7300, 122.5600)
+    listing(conn, donor_id=donor, donor_name="Self")
+    assert [a["recipient_id"] for a in alerts(conn)] == [other]
+
 @pytest.mark.parametrize("status", ["claimed", "withdrawn", "completed", "expired"])
 def test_only_claimable_listings(conn, status):
     org(conn, O1, 10.7300, 122.5600)
