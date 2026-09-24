@@ -205,9 +205,13 @@ export default function App() {
     </div>
   )
 
-  const summary =
-    (mine.length ? `${mine.length} pickup${mine.length === 1 ? '' : 's'} · ` : '') +
-    `${open.length} listing${open.length === 1 ? '' : 's'} ${viewer ? 'near you' : 'live now'}`
+  const summary = (
+    <>
+      {mine.length ? `${mine.length} pickup${mine.length === 1 ? '' : 's'} · ` : ''}
+      {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
+      {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
+    </>
+  )
   const listing = (
     <>
       {mine.length > 0 && (
@@ -224,10 +228,8 @@ export default function App() {
         </>
       )}
 
-      <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">
-        {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
-        {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
-      </h2>
+      {/* phones show this in the sheet's handle already */}
+      {isDesktop && <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">{summary}</h2>}
       {open.length === 0 && (
         <div className="text-center text-slate-500 text-sm py-8">
           <div className="text-4xl mb-2">🌱</div>
