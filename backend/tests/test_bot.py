@@ -248,18 +248,15 @@ def test_markdown_escaping():
 
 def test_application_builds():
     app = h.build_application("123456:TEST")
-    kinds = [getattr(c, "name", None) or type(c).__name__ for c in app.handlers[0]]
+    handlers = app.handlers[0]
     # conversations first; catch-alls last so they only see what no conversation handled
-    assert kinds == [
-        "onboarding", "posting",
-        "CallbackQueryHandler",  # flash:* claims
-        "CommandHandler",  # /stop
-        "CommandHandler",  # /mylistings
-        "CallbackQueryHandler",  # gone:* (Mark as gone)
-        "CommandHandler",  # /cancel
-        "CallbackQueryHandler",  # stale buttons
-        "MessageHandler",  # stray text
-    ]
+    assert [c.name for c in handlers[:2]] == ["onboarding", "posting"]
+    stale, stray = handlers[-2], handlers[-1]
+    assert type(stale).__name__ == "CallbackQueryHandler" and stale.pattern is None  # any leftover button
+    assert type(stray).__name__ == "MessageHandler"
+    # every global button handler sits between them
+    patterns = {h_.pattern.pattern for h_ in handlers[2:-2] if getattr(h_, "pattern", None) is not None}
+    assert {"^flash:", "^oclaim:", "^gone:"} <= patterns
 
 
 def test_storage_upload_roundtrip():
