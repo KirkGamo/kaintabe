@@ -255,7 +255,8 @@ def unlinked_orgs() -> list[dict]:
     """Seeded partner orgs nobody has linked a Telegram account to yet."""
     with db.connect() as conn:
         return conn.execute(
-            "select id, name from recipients where type = 'partner_org' and telegram_chat_id is null order by name"
+            "select id, name from recipients where type = 'partner_org' and telegram_chat_id is null"
+            " and id not in (select row_id from demo_parked) order by name"  # parked demo orgs aren't free
         ).fetchall()
 
 
@@ -367,3 +368,72 @@ def donor_listings(donor_id) -> list[dict]:
             """,
             (donor_id,),
         ).fetchall()
+
+
+# --- demo role switch (owner-only /demo) ----------------------------------------------
+# A parked role keeps its row; only the chat link is removed (and remembered in demo_parked).
+
+ROLE_KINDS = ("donor", "org", "individual")
+_RECIPIENT_TYPE = {"org": "partner_org", "individual": "individual"}
+
+
+def _active_role(conn, kind: str, chat_id: int, via_bot: str) -> dict | None:
+    if kind == "donor":
+        return conn.execute("select * from donors where telegram_chat_id = %s", (chat_id,)).fetchone()
+    return conn.execute(
+        "select * from recipients where type = %s and telegram_chat_id = %s and via_bot = %s",
+        (_RECIPIENT_TYPE[kind], chat_id, via_bot),
+    ).fetchone()
+
+
+def role_summary(chat_id: int, via_bot: str) -> dict:
+    """{kind: {"active": name or None, "parked": [names, newest first]}} for this chat on this bot."""
+    with db.connect() as conn:
+        out = {}
+        for kind in ROLE_KINDS:
+            row = _active_role(conn, kind, chat_id, via_bot)
+            table = "donors" if kind == "donor" else "recipients"
+            parked = conn.execute(
+                f"select t.name from demo_parked p join {table} t on t.id = p.row_id"
+                " where p.kind = %s and p.chat_id = %s and p.via_bot = %s order by p.parked_at desc",
+                (kind, chat_id, "" if kind == "donor" else via_bot),
+            ).fetchall()
+            out[kind] = {"active": row["name"] if row else None, "parked": [p["name"] for p in parked]}
+        return out
+
+
+def park_roles(chat_id: int, via_bot: str, kinds) -> list[str]:
+    """Unlink these roles from the chat (remembering them); returns the kinds that were parked."""
+    parked = []
+    with db.connect() as conn:
+        for kind in kinds:
+            row = _active_role(conn, kind, chat_id, via_bot)
+            if not row:
+                continue
+            table = "donors" if kind == "donor" else "recipients"
+            conn.execute(f"update {table} set telegram_chat_id = null where id = %s", (row["id"],))
+            conn.execute(
+                "insert into demo_parked (kind, row_id, chat_id, via_bot) values (%s, %s, %s, %s)"
+                " on conflict (kind, row_id) do update set parked_at = now()",
+                (kind, row["id"], chat_id, "" if kind == "donor" else via_bot),
+            )
+            parked.append(kind)
+    return parked
+
+
+def restore_role(chat_id: int, via_bot: str, kind: str) -> dict | None:
+    """Make this role active again: the current one if linked, else the most recently parked one."""
+    with db.connect() as conn:
+        if row := _active_role(conn, kind, chat_id, via_bot):
+            return row
+        p = conn.execute(
+            "delete from demo_parked where (kind, row_id) = (select kind, row_id from demo_parked"
+            " where kind = %s and chat_id = %s and via_bot = %s order by parked_at desc limit 1) returning row_id",
+            (kind, chat_id, "" if kind == "donor" else via_bot),
+        ).fetchone()
+        if not p:
+            return None
+        table = "donors" if kind == "donor" else "recipients"
+        return conn.execute(
+            f"update {table} set telegram_chat_id = %s where id = %s returning *", (chat_id, p["row_id"])
+        ).fetchone()

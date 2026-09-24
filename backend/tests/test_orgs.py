@@ -24,7 +24,7 @@ def msg(chat, text=None, location=None):
     if text is not None:
         m["text"] = text
         if text.startswith("/"):
-            m["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text)}]
+            m["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
     if location:
         m["location"] = {"latitude": location[0], "longitude": location[1]}
     return {"update_id": next(_ids), "message": m}
@@ -39,6 +39,16 @@ def tap(chat, data):
 
 def cleanup():
     with db.connect() as conn:
+        # parked demo roles have no chat link any more; find them through demo_parked
+        parked = conn.execute("delete from demo_parked where chat_id in (%s, %s) returning kind, row_id",
+                              (A, B)).fetchall()
+        for p in parked:
+            if p["kind"] == "donor":
+                conn.execute("delete from donors where id = %s", (p["row_id"],))
+            elif str(p["row_id"]) == JARO:
+                conn.execute("update recipients set telegram_chat_id = %s where id = %s", (A, JARO))
+            else:
+                conn.execute("delete from recipients where id = %s", (p["row_id"],))
         conn.execute("delete from recipients where telegram_chat_id in (%s, %s) and id <> %s", (A, B, JARO))
         conn.execute("delete from donors where telegram_chat_id in (%s, %s)", (A, B))
         conn.execute("update recipients set telegram_chat_id = null, via_bot = null, review_status = 'approved' "
@@ -165,6 +175,72 @@ def test_individual_on_flash_list_can_also_register_an_org():
         kinds = {r["type"] for r in conn.execute(
             "select type from recipients where telegram_chat_id = %s and via_bot = %s", (A, BOT))}
     assert kinds == {"individual", "partner_org"}
+
+
+# --- /demo role switch -------------------------------------------------------------------
+
+def all_three_roles(chat):
+    """Donor + individual + linked seeded org (Jaro) for one chat, like the presenter's account."""
+    with db.connect() as conn:
+        conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) "
+                     "values ('Test Lugawan', 'business', 10.729, 122.5576, %s, now())", (chat,))
+    run(msg(chat, "/start"), tap(chat, "role:recipient"), msg(chat, location=(10.7300, 122.5600)))
+    run(msg(chat, "/start"), tap(chat, "role:org"), tap(chat, f"orglink:{JARO}"))
+
+
+def active(chat):
+    return {k: r["active"] for k, r in h.repo.role_summary(chat, BOT).items()}
+
+
+def demo(chat, *extra, admin=A):
+    with patch.object(h.settings, "demo_admin_chat_id", str(admin)):
+        return run(*extra) if extra else None
+
+
+def test_demo_switch_parks_and_restores_roles():
+    all_three_roles(A)
+    demo(A, msg(A, "/demo org"))
+    assert active(A) == {"donor": None, "org": "Bayanihan Pantry Jaro", "individual": None}
+    assert JARO not in [str(o["id"]) for o in h.repo.unlinked_orgs()]  # parked orgs aren't up for grabs
+
+    fake = demo(A, msg(A, "/demo donor"))
+    assert active(A) == {"donor": "Test Lugawan", "org": None, "individual": None}
+    assert any("only the donor *Test Lugawan*" in t for t in texts(fake))
+
+    demo(A, msg(A, "/demo fresh"))
+    assert active(A) == {"donor": None, "org": None, "individual": None}
+    fake = run(msg(A, "/start"))  # a brand-new user again: the full role question
+    assert any("What brings you here?" in t for t in texts(fake))
+
+    demo(A, msg(A, "/demo all"))
+    assert active(A) == {"donor": "Test Lugawan", "org": "Bayanihan Pantry Jaro", "individual": "Org"}
+
+
+def test_demo_individual_is_switched_back_on():
+    all_three_roles(A)
+    run(msg(A, "/stop"))
+    demo(A, msg(A, "/demo individual"))
+    assert h.repo.get_individual(A, BOT)["active"] is True
+
+
+def test_demo_role_never_registered_says_how_to_register():
+    fake = demo(A, msg(A, "/demo org"))
+    assert any("no partner org profile yet" in t for t in texts(fake))
+
+
+def test_demo_mid_conversation_ends_the_draft():
+    """/demo while the bot waits for an org name must not let the next text become that name."""
+    fake = demo(A, msg(A, "/start"), tap(A, "role:org"), tap(A, "orglink:new"), msg(A, "/demo donor"),
+                msg(A, "Not An Org Name"))
+    assert org_row(A) is None
+    assert not any("Not An Org Name" in t for t in texts(fake))
+
+
+def test_demo_is_owner_only():
+    all_three_roles(B)
+    fake = demo(B, msg(B, "/demo fresh"), admin=A)  # B isn't the admin
+    assert any("don't know that command" in t for t in texts(fake))
+    assert active(B)["donor"] == "Test Lugawan"
 
 
 def test_error_message_does_not_blame_connection_for_bugs():

@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # The public web app (opened as a Telegram Mini App). Defaults to the first https FRONTEND_ORIGIN.
     web_url: str = ""
 
+    # Telegram chat ids (comma-separated) allowed to use /demo, the on-stage role switch
+    demo_admin_chat_id: str = ""
+
+    @property
+    def demo_admins(self) -> set[int]:
+        return {int(c) for c in self.demo_admin_chat_id.replace(" ", "").split(",") if c}
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.frontend_origin.split(",") if o.strip()]
