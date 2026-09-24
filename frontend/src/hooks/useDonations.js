@@ -3,17 +3,20 @@ import { supabase } from '../lib/supabase'
 
 export const ACTIVE_STATUSES = ['posted', 'escalated', 'claimed']
 
+// public_listings: every listing with an APPROXIMATE location (~500 m grid cell), no donor name,
+// no photo. This is all the browser's public key can read; exact details come from /api/map.
 const COLUMNS =
-  'id, donor_name, photo_url, food_type, quantity, est_kg, lat, lng, listing_type, current_price, ' +
-  'expires_at, search_radius_m, radius_widened_at, status, created_at, safety_checklist, original_price, allergens, ai_assisted, flash_offer_count'
+  'id, status, listing_type, food_type, est_kg, original_price, current_price, allergens, ai_assisted, ' +
+  'safety_checked, expires_at, created_at, search_radius_m, radius_widened_at, flash_offer_count, lat, lng'
 
 /**
- * Active listings kept in sync via Supabase Realtime.
- * Returns { donations, live } where live = realtime channel is subscribed.
+ * Live public listings via Supabase Realtime.
+ * Returns { donations, live, changedAt } — changedAt bumps on every change (used to refresh role views).
  */
 export function useDonations() {
   const [byId, setById] = useState({})
   const [live, setLive] = useState(false)
+  const [changedAt, setChangedAt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -28,8 +31,8 @@ export function useDonations() {
 
     // Subscribe first, then load, so nothing posted in between is missed
     const channel = supabase
-      .channel('donations-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'donations' }, (payload) => {
+      .channel('public-listings-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'public_listings' }, (payload) => {
         if (payload.eventType === 'DELETE') {
           setById((prev) => {
             const next = { ...prev }
@@ -39,19 +42,19 @@ export function useDonations() {
         } else {
           upsert(payload.new)
         }
+        setChangedAt(Date.now())
       })
       .subscribe((status) => setLive(status === 'SUBSCRIBED'))
 
     supabase
-      .from('donations')
+      .from('public_listings')
       .select(COLUMNS)
       .in('status', ACTIVE_STATUSES)
-      .gt('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
+      .gt('expires_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
       .then(({ data, error }) => {
         if (cancelled) return
         if (error) {
-          console.error('load donations failed', error)
+          console.error('load listings failed', error)
           return
         }
         setById((prev) => ({ ...Object.fromEntries(data.map((d) => [d.id, d])), ...prev }))
@@ -63,7 +66,7 @@ export function useDonations() {
     }
   }, [])
 
-  return { donations: Object.values(byId), live }
+  return { donations: Object.values(byId), live, changedAt }
 }
 
 export function useRecipients() {

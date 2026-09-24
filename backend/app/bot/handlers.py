@@ -861,7 +861,10 @@ def my_listings_view(listings: list[dict]) -> tuple[str, InlineKeyboardMarkup | 
     if claimed:
         lines += ["", "*Being picked up* (can't be taken down)"]
         for d in claimed:
-            lines.append(f"• {md(d['food_type'])} ({md(d['quantity'])})\n   ✔️ by *{md(d['claimer_name'] or 'someone')}*, they're coming")
+            who = f"*{md(d['claimer_name'] or 'someone')}*"
+            status = (f"✔️ by {who}, they're coming" if _time_left(d["expires_at"]) != "0 min"
+                      else f"⌛ pickup window over; closes within the hour if {who} didn't collect it")
+            lines.append(f"• {md(d['food_type'])} ({md(d['quantity'])})\n   {status}")
     if rows:
         lines += ["", "Already given away or eaten? Tap *Take down* below so no one makes a wasted trip."]
     return "\n".join(lines), InlineKeyboardMarkup(rows) if rows else None

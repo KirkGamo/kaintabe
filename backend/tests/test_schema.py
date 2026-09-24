@@ -133,5 +133,6 @@ def test_anon_key_is_read_only(frontend_env):
     r = httpx.post(f"{base}/rpc/claim_donation", headers=h,
                    json={"p_donation_id": "00000000-0000-0000-0000-000000000000", "p_recipient_id": JARO})
     assert r.status_code in (401, 403, 404)
+    # nearby_donations returns exact listings; since R3d it's backend-only (migration 016)
     r = httpx.post(f"{base}/rpc/nearby_donations", headers=h, json={"p_recipient_id": JARO})
-    assert r.status_code == 200
+    assert r.status_code in (401, 403, 404)

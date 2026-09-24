@@ -28,8 +28,16 @@ function FlyTo({ target }) {
   return null
 }
 
-// items: [{ donation, mode: "open" | "out" | "mine" }] — "out" = listing whose reach doesn't cover the viewer
-export default function MapView({ items, recipients, viewer, selected, onSelect, now }) {
+// Public/approximate locations are grid-cell centers; draw them as an area, never a precise pin
+const APPROX_AREA_M = 300
+
+/**
+ * items: [{ donation, mode }]
+ *   exact:       'open' (in the org's reach) · 'mine' (claimed by this viewer) · 'own' (the donor's listing)
+ *   approximate: 'public' (no identity) · 'out' (outside the org's reach) — location is a ~500 m cell
+ * home: the viewer's own spot (org / donor / individual), if known
+ */
+export default function MapView({ items, recipients, viewer, home, selected, onSelect, now }) {
   return (
     <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false}>
       <TileLayer
@@ -59,12 +67,43 @@ export default function MapView({ items, recipients, viewer, selected, onSelect,
         </Marker>
       ))}
 
+      {home && (
+        <Marker position={[home.lat, home.lng]} icon={pinIcon({ color: '#0f766e', emoji: '📍', size: 28 })} zIndexOffset={-200}>
+          <Popup>{home.label}</Popup>
+        </Marker>
+      )}
+
       {items.map(({ donation: d, mode }) => {
         const { leftMs, fraction } = timeLeft(d, now)
-        const mine = mode === 'mine'
-        const out = mode === 'out'
-        const color = mine ? '#4f46e5' : out ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
+        const approx = mode === 'public' || mode === 'out'
+        const color = approx && mode === 'out' ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
         const isSelected = selected?.id === d.id
+        if (approx) {
+          return (
+            <Circle
+              key={d.id}
+              center={[d.lat, d.lng]}
+              radius={APPROX_AREA_M}
+              pathOptions={{ color, weight: isSelected ? 3 : 1.5, fillColor: color, fillOpacity: isSelected ? 0.35 : 0.2 }}
+              eventHandlers={{ click: () => onSelect(d) }}
+            >
+              <Popup>
+                <strong>{d.food_type}</strong>
+                {d.listing_type === 'sale' ? ' · 🏷️ for sale' : ''}
+                <br />
+                {formatLeft(leftMs)} left · approximate area
+                {mode === 'out' && (
+                  <>
+                    <br />
+                    <em>Not in your area yet: its reach doesn't cover you</em>
+                  </>
+                )}
+              </Popup>
+            </Circle>
+          )
+        }
+        const mine = mode === 'mine'
+        const pinColor = mine ? '#4f46e5' : mode === 'own' ? '#0f766e' : color
         return (
           <Fragment key={d.id}>
             {/* Outline-only reach circles so overlapping listings stay readable; fill the selected one */}
@@ -73,9 +112,9 @@ export default function MapView({ items, recipients, viewer, selected, onSelect,
                 center={[d.lat, d.lng]}
                 radius={d.search_radius_m}
                 pathOptions={{
-                  color,
+                  color: pinColor,
                   weight: isSelected ? 2 : 1,
-                  opacity: isSelected ? 0.9 : out ? 0.35 : 0.5,
+                  opacity: isSelected ? 0.9 : 0.5,
                   fillOpacity: isSelected ? 0.12 : 0,
                   dashArray: '4 6',
                 }}
@@ -83,20 +122,18 @@ export default function MapView({ items, recipients, viewer, selected, onSelect,
             )}
             <Marker
               position={[d.lat, d.lng]}
-              icon={pinIcon({ color, emoji: mine ? '✔️' : d.listing_type === 'sale' ? '🏷️' : '🍱', ring: isSelected, faded: out })}
-              zIndexOffset={isSelected ? 1000 : out ? -50 : 0}
+              icon={pinIcon({
+                color: pinColor,
+                emoji: mine ? '✔️' : mode === 'own' ? '📦' : d.listing_type === 'sale' ? '🏷️' : '🍱',
+                ring: isSelected,
+              })}
+              zIndexOffset={isSelected ? 1000 : 0}
               eventHandlers={{ click: () => onSelect(d) }}
             >
               <Popup>
                 <strong>{d.food_type}</strong> · {d.quantity}
                 <br />
-                {mine ? 'Claimed by you' : `${formatLeft(leftMs)} left`}
-                {out && (
-                  <>
-                    <br />
-                    <em>Not in your area yet: its reach doesn't cover you</em>
-                  </>
-                )}
+                {mine ? 'Claimed by you' : mode === 'own' ? 'Your listing' : `${formatLeft(leftMs)} left`}
               </Popup>
             </Marker>
           </Fragment>

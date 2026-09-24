@@ -50,6 +50,49 @@ async def me(user: dict = Depends(tg_auth.telegram_user)):
     return {"telegram_user": {"id": user["id"], "first_name": user.get("first_name")}, "org": _public_org(org)}
 
 
+@router.get("/map")
+async def role_map(user: dict = Depends(tg_auth.telegram_user)):
+    """Exact map data for this Telegram user's roles only (the public map is approximate):
+       org        -> listings within its reach + its own pending pickups
+       individual -> their own pending pickups (flash offers they claimed)
+       donor      -> their own live/claimed listings
+    """
+    chat_id, bot = int(user["id"]), await tg_auth.bot_username()
+    org, person, donor = await asyncio.gather(
+        asyncio.to_thread(repo.get_org, chat_id, bot),
+        asyncio.to_thread(repo.get_individual, chat_id, bot),
+        asyncio.to_thread(repo.get_donor_by_chat, chat_id),
+    )
+    in_range, pickups, mine = await asyncio.gather(
+        asyncio.to_thread(repo.listings_in_range, org["id"]) if org else asyncio.sleep(0, []),
+        asyncio.to_thread(repo.pending_pickups, [r["id"] for r in (org, person) if r]),
+        asyncio.to_thread(repo.donor_listings, donor["id"]) if donor else asyncio.sleep(0, []),
+    )
+    return {
+        "first_name": user.get("first_name"),
+        "org": _public_org(org),
+        "individual": {"lat": person["lat"], "lng": person["lng"], "active": person["active"]} if person else None,
+        "donor": {"id": donor["id"], "name": donor["name"], "type": donor["type"], "lat": donor["lat"],
+                  "lng": donor["lng"]} if donor else None,
+        "in_range": in_range,
+        "my_pickups": pickups,
+        "my_listings": mine,
+    }
+
+
+@router.post("/listings/{donation_id}/withdraw")
+async def withdraw_listing(donation_id: UUID, user: dict = Depends(tg_auth.telegram_user)):
+    """A donor takes down their own unclaimed listing (same rule as the bot's /mylistings)."""
+    donor = await asyncio.to_thread(repo.get_donor_by_chat, int(user["id"]))
+    if not donor:
+        raise HTTPException(403, "Only the donor can take this listing down.")
+    try:
+        gone = await asyncio.to_thread(repo.withdraw_donation, str(donation_id), donor["id"])
+    except repo.NotAvailable:
+        raise HTTPException(409, "It's already claimed (or no longer live), so it can't be taken down.")
+    return {"id": gone["id"], "status": gone["status"]}
+
+
 @router.post("/claims", status_code=201)
 async def create_claim(body: ClaimRequest, background: BackgroundTasks, org: dict = Depends(current_org)):
     try:

@@ -1,4 +1,5 @@
 """Auto-widen / escalate / expire SQL functions (run directly, inside a rolled-back transaction)."""
+import pytest
 from tests.conftest import CITY_PROPER, insert_donation
 
 
@@ -85,3 +86,37 @@ def test_fractional_demo_interval(conn):
 def test_cron_job_scheduled(conn):
     job = conn.execute("select schedule, command, active from cron.job where jobname = 'kaintabe-tick'").fetchone()
     assert job["active"] and job["command"] == "select public.kaintabe_tick()"
+
+
+# --- claimed but never picked up (017) ---------------------------------------------------
+
+def claimed_expired(conn, minutes_past_expiry):
+    from tests.conftest import JARO
+    d = insert_donation(conn, expires_at_sql=f"now() - interval '{minutes_past_expiry} minutes'")
+    conn.execute("update donations set status = 'claimed' where id = %s", (d,))
+    claim = conn.execute("insert into claims (donation_id, recipient_id) values (%s, %s) returning id", (d, JARO)).fetchone()
+    return d, claim["id"]
+
+
+def test_claimed_listing_closes_an_hour_after_expiry(conn):
+    within_grace, _ = claimed_expired(conn, 30)
+    past_grace, _ = claimed_expired(conn, 61)
+    conn.execute("select expire_donations()")
+    assert row(conn, within_grace)["status"] == "claimed"  # can still confirm a just-in-time pickup
+    assert row(conn, past_grace)["status"] == "expired"
+
+
+def test_confirm_refused_after_listing_closed(conn):
+    import psycopg
+    d, claim_id = claimed_expired(conn, 61)
+    conn.execute("select expire_donations()")
+    with pytest.raises(psycopg.errors.RaiseException, match="not_confirmable"):
+        with conn.transaction():
+            conn.execute("select * from confirm_pickup(%s, %s)", (claim_id, "https://example.com/late.jpg"))
+    assert row(conn, d)["status"] == "expired"
+
+
+def test_confirm_within_grace_still_counts(conn):
+    d, claim_id = claimed_expired(conn, 30)
+    conn.execute("select * from confirm_pickup(%s, %s)", (claim_id, "https://example.com/p.jpg"))
+    assert row(conn, d)["status"] == "completed"
