@@ -48,12 +48,17 @@ function buildView(publicListings, identity, now, config) {
   }
   if (individual) {
     const radius = individual.radius_m ?? 3000
+    // Flash offers they got: what the Telegram offer already told them (donor, food, exact distance)
+    // on top of the approximate public listing; the exact spot comes once they claim it
+    const offers = new Map(identity.flashOffers.map((o) => [o.id, o]))
     const open = others
       .map((d) => {
+        const offer = offers.get(d.id)
+        if (offer) return { donation: { ...d, ...offer }, distance: offer.distance_m, mode: 'person', inReach: true, offer: true }
         const distance = distanceM(individual, d)
         return { donation: d, distance, mode: 'person', inReach: distance <= radius }
       })
-      .sort((a, b) => a.distance - b.distance)
+      .sort((a, b) => (b.offer ? 1 : 0) - (a.offer ? 1 : 0) || a.distance - b.distance)
     return { open, out: [], mine, own, reach: { lat: individual.lat, lng: individual.lng, radius } }
   }
   const open = others
@@ -191,14 +196,17 @@ export default function App() {
 
   const handleClaim = (d) =>
     run(d, async () => {
-      const claim = await claimDonation(d.id, viewer.id)
+      // an org claims in its reach; an individual claims a flash offer (who is acting comes from Telegram)
+      const claim = await claimDonation(d.id, viewer?.id)
       setSelectedId(d.id)
       setToast({
         kind: 'ok',
         text:
           claim.reserved_price != null
             ? `Reserved ${d.food_type} for ₱${Number(claim.reserved_price)}. Pay the donor at pickup.`
-            : `Claimed ${d.food_type}! The donor has been notified.`,
+            : viewer
+              ? `Claimed ${d.food_type}! The donor has been notified.`
+              : `It's yours! ${d.food_type} is under Your pickups, with directions.`,
       })
     }).catch(() => {})
 
@@ -216,7 +224,7 @@ export default function App() {
       setToast({ kind: 'ok', text: `Taken down: ${d.food_type}` })
     }).catch(() => {})
 
-  const card = ({ donation: d, distance, mode, eta, inReach }) => (
+  const card = ({ donation: d, distance, mode, eta, inReach, offer }) => (
     <div key={d.id} id={`card-${d.id}`}>
       <DonationCard
         donation={d}
@@ -224,6 +232,7 @@ export default function App() {
         distance={distance}
         eta={eta}
         inReach={inReach}
+        offer={offer}
         reachKm={reach ? reach.radius / 1000 : null}
         now={now}
         config={config}
@@ -337,7 +346,8 @@ export default function App() {
         </main>
       ) : (
         <main className="flex-1 min-h-0 relative md:flex md:flex-row">
-          <section className="absolute inset-0 md:static md:flex-1">
+          {/* isolate: Leaflet's panes and controls (z-index up to 1000) stay inside the map, under the sheet */}
+          <section className="absolute inset-0 isolate md:static md:flex-1">
             <MapView
               items={mapItems}
               recipients={recipients}
@@ -345,6 +355,7 @@ export default function App() {
               home={home}
               reach={reach}
               kitchensInReach={kitchensInReach}
+              compact={!isDesktop}
               selected={selected}
               onSelect={select}
               now={now}

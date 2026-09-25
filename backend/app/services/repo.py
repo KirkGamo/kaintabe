@@ -378,6 +378,31 @@ def donor_listings(donor_id) -> list[dict]:
         ).fetchall()
 
 
+def open_flash_offers(recipient_id) -> list[dict]:
+    """Flash offers this individual got that are still up for grabs, with what the Telegram offer
+    already told them (food, donor, distance). The exact spot comes only after they claim."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select d.id, d.food_type, d.quantity, d.donor_name, d.photo_url,
+                   st_distance(d.location, r.location) as distance_m
+              from flash_offers f
+              join donations d on d.id = f.donation_id
+              join recipients r on r.id = f.recipient_id
+             where f.recipient_id = %s and d.status = 'escalated' and d.expires_at > now()
+             order by distance_m
+            """,
+            (recipient_id,),
+        ).fetchall()
+
+
+def was_offered(donation_id: str, recipient_id) -> bool:
+    with db.connect() as conn:
+        return conn.execute(
+            "select 1 from flash_offers where donation_id = %s and recipient_id = %s", (donation_id, recipient_id)
+        ).fetchone() is not None
+
+
 def neighbors_near(lat: float, lng: float, via_bot: str) -> int:
     """How many people on this bot's flash-offer list could get food posted at this spot
     (it's within their own pickup range). A count only: individuals' locations stay private."""

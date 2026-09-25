@@ -1,4 +1,4 @@
-"""POST /api/claims: the org comes from signed Telegram initData (real DB; Telegram sending mocked)."""
+"""POST /api/claims: who claims comes from signed Telegram initData (real DB; Telegram sending mocked)."""
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -76,7 +76,56 @@ def test_no_or_bad_identity_gets_401(donation, api_orgs):
 def test_telegram_user_who_is_not_an_org_gets_403(donation, api_orgs):
     _, headers = api_orgs
     res = claim(donation, headers(tg_id=-219999))
-    assert res.status_code == 403 and "partner organizations" in res.json()["detail"]
+    assert res.status_code == 403 and "partner kitchens" in res.json()["detail"]
+
+
+@patch("app.routes.telegram.send_message", new_callable=AsyncMock)
+def test_individual_claims_only_what_they_were_flash_offered(send, api_orgs):
+    """Kitchens get first pick: an individual can claim on the map only food flash-offered to them."""
+    from app.services import repo
+    _, headers = api_orgs
+    person = repo.upsert_individual(-219201, "Karlo", 10.7260, 122.5585, "api_test_bot")
+    conn = db.connect()
+    offered = insert_donation(conn, food_type="API flash offered", status="escalated", radius_m=8000)
+    other = insert_donation(conn, food_type="API flash not offered", status="escalated", radius_m=8000)
+    conn.execute("insert into flash_offers (donation_id, recipient_id) values (%s, %s)", (offered, person["id"]))
+    conn.commit()
+    try:
+        assert claim(str(other), headers(tg_id=-219201)).status_code == 403
+        res = claim(str(offered), headers(tg_id=-219201))
+        assert res.status_code == 201, res.text
+        assert res.json()["recipient_id"] == str(person["id"])
+        assert "Karlo" in send.await_args.args[1]
+
+        view = client.get("/api/map", headers=headers(tg_id=-219201)).json()
+        assert str(offered) in {p["id"] for p in view["my_pickups"]}  # now exact, with directions
+        assert str(offered) not in {o["id"] for o in view["flash_offers"]}  # no longer open
+    finally:
+        conn.execute("delete from claims where donation_id = any(%s::uuid[])", ([str(offered), str(other)],))
+        conn.execute("delete from donations where id = any(%s::uuid[])", ([str(offered), str(other)],))
+        conn.execute("delete from recipients where id = %s", (person["id"],))
+        conn.commit()
+        conn.close()
+
+
+def test_open_flash_offers_listed_for_the_individual(api_orgs):
+    from app.services import repo
+    _, headers = api_orgs
+    person = repo.upsert_individual(-219202, "Ana", 10.7260, 122.5585, "api_test_bot")
+    conn = db.connect()
+    offered = insert_donation(conn, food_type="API open offer", status="escalated", radius_m=8000)
+    conn.execute("insert into flash_offers (donation_id, recipient_id) values (%s, %s)", (offered, person["id"]))
+    conn.commit()
+    try:
+        offers = client.get("/api/map", headers=headers(tg_id=-219202)).json()["flash_offers"]
+        mine = [o for o in offers if o["id"] == str(offered)]
+        assert len(mine) == 1 and mine[0]["food_type"] == "API open offer" and mine[0]["distance_m"] < 300
+        assert "lat" not in mine[0]  # the exact spot comes only after claiming
+    finally:
+        conn.execute("delete from donations where id = %s", (offered,))
+        conn.execute("delete from recipients where id = %s", (person["id"],))
+        conn.commit()
+        conn.close()
 
 
 def test_invalid_ids_get_422(api_orgs):

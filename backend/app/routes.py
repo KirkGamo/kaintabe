@@ -22,14 +22,6 @@ class ClaimRequest(BaseModel):
     recipient_id: UUID | None = None  # ignored: the org comes from the verified Telegram user
 
 
-async def current_org(user: dict = Depends(tg_auth.telegram_user)) -> dict:
-    """The partner org the verified Telegram user represents, or 403."""
-    org = await asyncio.to_thread(repo.get_org, int(user["id"]), await tg_auth.bot_username())
-    if not org:
-        raise HTTPException(403, "Only registered partner organizations can claim. Register in the KainTabe bot.")
-    return org
-
-
 def _public_org(org: dict | None) -> dict | None:
     if not org:
         return None
@@ -63,11 +55,13 @@ async def role_map(user: dict = Depends(tg_auth.telegram_user)):
         asyncio.to_thread(repo.get_individual, chat_id, bot),
         asyncio.to_thread(repo.get_donor_by_chat, chat_id),
     )
-    in_range, pickups, mine, neighbors = await asyncio.gather(
+    offered = person and person["active"]
+    in_range, pickups, mine, neighbors, offers = await asyncio.gather(
         asyncio.to_thread(repo.listings_in_range, org["id"]) if org else asyncio.sleep(0, []),
         asyncio.to_thread(repo.pending_pickups, [r["id"] for r in (org, person) if r]),
         asyncio.to_thread(repo.donor_listings, donor["id"]) if donor else asyncio.sleep(0, []),
         asyncio.to_thread(repo.neighbors_near, donor["lat"], donor["lng"], bot) if donor else asyncio.sleep(0, 0),
+        asyncio.to_thread(repo.open_flash_offers, person["id"]) if offered else asyncio.sleep(0, []),
     )
     return {
         "first_name": user.get("first_name"),
@@ -80,6 +74,7 @@ async def role_map(user: dict = Depends(tg_auth.telegram_user)):
         "in_range": in_range,
         "my_pickups": pickups,
         "my_listings": mine,
+        "flash_offers": offers,  # individual: offers they got that are still free to take
     }
 
 
@@ -97,9 +92,20 @@ async def withdraw_listing(donation_id: UUID, user: dict = Depends(tg_auth.teleg
 
 
 @router.post("/claims", status_code=201)
-async def create_claim(body: ClaimRequest, background: BackgroundTasks, org: dict = Depends(current_org)):
+async def create_claim(body: ClaimRequest, background: BackgroundTasks, user: dict = Depends(tg_auth.telegram_user)):
+    """A partner org claims food in its reach; an individual may claim only food they were
+    flash-offered (kitchens get first pick), the same rule as the bot's 🙋 button."""
+    chat_id, bot, donation_id = int(user["id"]), await tg_auth.bot_username(), str(body.donation_id)
+    claimer = await asyncio.to_thread(repo.get_org, chat_id, bot)
+    if not claimer:
+        person = await asyncio.to_thread(repo.get_individual, chat_id, bot)
+        if person and person["active"] and await asyncio.to_thread(repo.was_offered, donation_id, person["id"]):
+            claimer = person
+    if not claimer:
+        raise HTTPException(403, "Only partner kitchens can claim here. Individuals can take food offered to "
+                                 "them in a flash offer. Register in the KainTabe bot.")
     try:
-        claim = await asyncio.to_thread(repo.claim_donation, str(body.donation_id), str(org["id"]))
+        claim = await asyncio.to_thread(repo.claim_donation, donation_id, str(claimer["id"]))
     except repo.NotAvailable:
         raise HTTPException(409, "This listing was just claimed by someone else or is no longer available.")
 

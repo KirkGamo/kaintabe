@@ -1,6 +1,6 @@
 import { Fragment, useEffect } from 'react'
 import L from 'leaflet'
-import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import { AttributionControl, Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
 
@@ -40,11 +40,14 @@ const APPROX_AREA_M = 300
  * reach: the viewer's own pickup area { lat, lng, radius } (org / individual). Recipients see their
  *   area instead of every listing's search circle; a listing's circle shows only when it's selected.
  * kitchensInReach: (donor view) kitchens whose pickup area covers the donor's spot, highlighted
+ * compact: phone layout — the listings sheet covers the bottom, so the map credit goes top-left
  */
-export default function MapView({ items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, now }) {
+export default function MapView({
+  items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, now, compact = false,
+}) {
   const canReach = new Set(kitchensInReach.map((k) => k.id))
   return (
-    <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false}>
+    <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false} attributionControl={false}>
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -52,6 +55,7 @@ export default function MapView({ items, recipients, viewer, home, reach, kitche
       <FlyTo target={selected} />
       {/* top-right: the phone listings sheet covers the bottom of the map */}
       <ZoomControl position="topright" />
+      <AttributionControl position={compact ? 'topleft' : 'bottomright'} />
 
       {reach && (
         <Circle
@@ -99,11 +103,12 @@ export default function MapView({ items, recipients, viewer, home, reach, kitche
         </Marker>
       )}
 
-      {items.map(({ donation: d, mode, inReach }) => {
+      {items.map(({ donation: d, mode, inReach, offer }) => {
         const { leftMs, fraction } = timeLeft(d, now)
         const approx = mode === 'public' || mode === 'out' || mode === 'person'
         const greyed = mode === 'out' || (mode === 'person' && !inReach)
-        const color = greyed ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
+        // a flash offer for this individual stands out in the same violet as its card
+        const color = offer ? '#7c3aed' : greyed ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
         const isSelected = selected?.id === d.id
         if (approx) {
           return (
@@ -119,6 +124,12 @@ export default function MapView({ items, recipients, viewer, home, reach, kitche
                 {d.listing_type === 'sale' ? ' · 🏷️ for sale' : ''}
                 <br />
                 {formatLeft(leftMs)} left · approximate area
+                {offer && (
+                  <>
+                    <br />
+                    <strong style={{ color: '#6d28d9' }}>📣 Flash offer for you</strong>
+                  </>
+                )}
                 {mode === 'out' && (
                   <>
                     <br />

@@ -44,12 +44,13 @@ function formatEta(ms) {
  * mode: 'open'   — in range of the signed-in org, claimable
  *       'mine'   — claimed by that org/individual, awaiting pickup
  *       'out'    — (org) approximate, its reach doesn't cover the org yet: `eta` = ms until it does, or null
- *       'person' — (individual) approximate; `inReach` = within their own pickup range
+ *       'person' — (individual) approximate; `inReach` = within their own pickup range;
+ *                  `offer` = flash-offered to them: free to take (I'll pick it up)
  *       'public' — no identity: read-only, approximate, points people to the Telegram bot
  *       'own'    — the signed-in donor's own listing: Take down (or who claimed it)
  */
 export default function DonationCard({
-  donation: d, mode, distance, eta, inReach, reachKm, now, config, claim, selected, onSelect, onClaim, onConfirm,
+  donation: d, mode, distance, eta, inReach, offer, reachKm, now, config, claim, selected, onSelect, onClaim, onConfirm,
   onTakeDown, busy, botUrl, inTelegram,
 }) {
   const { leftMs, fraction } = timeLeft(d, now)
@@ -145,7 +146,27 @@ export default function DonationCard({
         </p>
       )}
 
-      {mode === 'person' && (
+      {mode === 'person' && offer && (
+        <>
+          <p className="mt-3 text-center text-sm font-medium text-violet-800 bg-violet-50 rounded-lg px-3 py-2">
+            📣 Flash offer for you: it's free, and the first person to tap gets it.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation()
+              onClaim(d)
+            }}
+            className="mt-2 w-full rounded-lg bg-violet-600 hover:bg-violet-700 active:bg-violet-800 disabled:opacity-60
+              text-white font-semibold py-2.5 min-h-11 transition"
+          >
+            {busy ? 'Claiming…' : "🙋 I'll pick it up"}
+          </button>
+        </>
+      )}
+
+      {mode === 'person' && !offer && (
         <p className="mt-3 text-center text-sm text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
           {inReach
             ? '🙋 Kitchens get first pick. If it’s still free when its search reaches the limit, you’ll get a flash offer in Telegram.'
