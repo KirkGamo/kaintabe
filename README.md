@@ -137,7 +137,7 @@ Run from the repo root with `backend/.venv/Scripts/python scripts/<name>`.
 | Script | Purpose |
 |--------|---------|
 | `apply_sql.py [--seed] [--until NNN]` | Apply pending migrations (each in one transaction) and optionally the seed. |
-| `demo.py status\|prepare\|post\|claim\|confirm\|escalate\|reset\|wipe` | Stage helper: plays the org and donors you don't have a second phone for; `wipe` starts the database from scratch (keeps the seed and sample history). In the bot, `/demo donor\|org\|individual\|fresh\|all` lets anyone switch which role their own account plays. See [docs/DEMO.md](docs/DEMO.md). |
+| `demo.py status\|prepare\|post\|claim\|confirm\|escalate\|reset\|wipe` | Stage helper: plays the org and donors you don't have a second phone for; `wipe` starts the database from scratch (keeps the seed and sample history; `wipe --all` empties it completely, restore the seed with `apply_sql.py --seed`). In the bot, `/demo donor\|org\|individual\|fresh\|all` lets anyone switch which role their own account plays. See [docs/DEMO.md](docs/DEMO.md). |
 | `demo_mode.py on [min]\|off` | Widen and sale-price timers: 1 min on stage, 10/60 min for real. |
 | `sim_post.py [--sale P] [--clear]` | Post a simulated listing, or delete all simulated rows. |
 | `seed_demo_history.py [--replace]` | A week of **sample** pickups for the dashboard, tagged so it can be removed. |

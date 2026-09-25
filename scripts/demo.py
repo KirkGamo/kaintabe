@@ -19,6 +19,7 @@ Usage (from repo root):
     backend/.venv/Scripts/python scripts/demo.py escalate           # jump a listing to 8 km + flash offers now
     backend/.venv/Scripts/python scripts/demo.py reset              # real timers back, remove stand-in listings
     backend/.venv/Scripts/python scripts/demo.py wipe [--yes]       # start from scratch (keeps seed + sample history)
+    backend/.venv/Scripts/python scripts/demo.py wipe --all [--yes] # ...including the seed: an empty database
 Add --bot dev to any command to use the dev bot (local rehearsal) instead of prod.
 """
 import argparse
@@ -307,12 +308,15 @@ NOT_HISTORY = "not (coalesce(safety_checklist, '{}') @> '{\"seed_history\": true
 
 
 def cmd_wipe(ctx: Ctx, a) -> None:
-    """Start from scratch: delete every real/test listing, donor and recipient; keep the seed + sample history."""
-    keep_donors = list(STANDIN_DONORS.values())
-    keep_recipients = STANDIN_ORGS + SEEDED_INDIVIDUALS
+    """Start from scratch: delete every real/test listing, donor and recipient; keep the seed + sample history.
+    With --all, delete the seed and sample history too (an empty database; restore the seed with
+    apply_sql.py --seed), plus saved bot conversations."""
+    keep_donors = [] if a.all else list(STANDIN_DONORS.values())
+    keep_recipients = [] if a.all else STANDIN_ORGS + SEEDED_INDIVIDUALS
+    scope = "true" if a.all else NOT_HISTORY  # which listings to delete
     with db.connect() as conn:
         listings = conn.execute(
-            f"select status, count(*) n from donations where {NOT_HISTORY} group by status order by status"
+            f"select status, count(*) n from donations where {scope} group by status order by status"
         ).fetchall()
         donors = conn.execute("select name, telegram_chat_id from donors where id <> all(%s::uuid[]) order by name",
                               (keep_donors,)).fetchall()
@@ -324,7 +328,7 @@ def cmd_wipe(ctx: Ctx, a) -> None:
             "select name, via_bot from recipients where id = any(%s::uuid[]) and telegram_chat_id is not null",
             (keep_recipients,),
         ).fetchall()
-        history = conn.execute(f"select count(*) n from donations where not {NOT_HISTORY}").fetchone()["n"]
+        history = conn.execute(f"select count(*) n from donations where not {scope}").fetchone()["n"]
 
         def names(rows, fmt):
             return ", ".join(fmt.format(**r) for r in rows) or "none"
@@ -335,18 +339,24 @@ def cmd_wipe(ctx: Ctx, a) -> None:
         print(f"  orgs/individuals ({len(recipients)}): {names(recipients, '{name} ({type}, {via_bot})')}")
         if links:
             print(f"  Telegram links of seeded orgs: {names(links, '{name} ({via_bot})')}")
-        print(f"Will KEEP: {history} sample-history pickups, the 3 seeded pantries, 2 seeded individuals, "
-              "3 stand-in donors, settings.")
+        if a.all:
+            bot_state = conn.execute("select count(*) n from bot_state").fetchone()["n"]
+            print(f"  saved bot conversations: {bot_state}")
+            print("Will KEEP: settings (timers) and the database structure. The Impact tab starts at zero;")
+            print("  demo.py's stand-ins need the seed back: backend/.venv/Scripts/python scripts/apply_sql.py --seed")
+        else:
+            print(f"Will KEEP: {history} sample-history pickups, the 3 seeded pantries, 2 seeded individuals, "
+                  "3 stand-in donors, settings.")
         if not a.yes:
             print("\nNothing deleted. Run again with --yes to do it.")
             return
 
         with conn.transaction():
             conn.execute(
-                f"delete from claims where donation_id in (select id from donations where {NOT_HISTORY})"
+                f"delete from claims where donation_id in (select id from donations where {scope})"
                 " or recipient_id <> all(%s::uuid[])", (keep_recipients,),
             )
-            conn.execute(f"delete from donations where {NOT_HISTORY}")
+            conn.execute(f"delete from donations where {scope}")
             conn.execute("delete from demo_parked")
             conn.execute("delete from recipients where id <> all(%s::uuid[])", (keep_recipients,))
             conn.execute(
@@ -354,6 +364,8 @@ def cmd_wipe(ctx: Ctx, a) -> None:
                 " active = true where id = any(%s::uuid[])", (keep_recipients,),
             )
             conn.execute("delete from donors where id <> all(%s::uuid[])", (keep_donors,))
+            if a.all:
+                conn.execute("delete from bot_state")
     print("\nWiped. Everyone (including you) starts fresh: send /start to the bot. "
           "If a chat was mid-question, send /cancel first.")
 
@@ -388,6 +400,7 @@ def main() -> None:
     sub.add_parser("reset")
     s = sub.add_parser("wipe")
     s.add_argument("--yes", action="store_true", help="actually delete (default: only show what would go)")
+    s.add_argument("--all", action="store_true", help="also delete the seed and sample history (empty database)")
     a = p.parse_args()
 
     ctx = setup(a.bot)

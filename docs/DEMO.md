@@ -47,6 +47,7 @@ small strip at the bottom (see "The terminal" below).
   - It deletes every listing, donor, org and individual except the seed.
   - It keeps the sample history, the 3 seeded pantries (stand-ins) and the stand-in donors.
   - **It can't be undone.**
+  - If the database was emptied with `demo wipe --all`, first restore the seed and sample history: `backend/.venv/Scripts/python scripts/apply_sql.py --seed`, then `backend/.venv/Scripts/python scripts/seed_demo_history.py`.
 - [ ] **Create your org once** on @KainTabe_bot. `/start` → *🏢 We're a community kitchen / org* → *➕ Register a new organization*.
   - Don't pick a listed pantry: `demo.py` uses those as stand-ins.
   - Choose 5 km and a location in Jaro.
