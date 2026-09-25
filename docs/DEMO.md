@@ -27,7 +27,7 @@ Share your **whole screen**, not a single window, so switching between Telegram 
 ```
 ┌───────────────────────────┬─────────────────────────────────────────┐
 │ Telegram Desktop          │ Browser: live map (tab 1), Impact (tab 2)│
-│ only the KainTabe chat    │ appcon2026-team-triecode-kaintabe...     │
+│ only the KainTabe chat    │ kaintabe.vercel.app                      │
 │ (~40% of the width)       │ (~60% of the width)                     │
 └───────────────────────────┴─────────────────────────────────────────┘
 Terminal for demo.py: on a second monitor that is NOT shared, or else a
@@ -71,7 +71,7 @@ small strip at the bottom (see "The terminal" below).
   - removes leftover stand-in listings;
   - prints your roles.
 - [ ] **Telegram:** send `/demo fresh`. This also wakes the backend, so the first reply during the pitch isn't slow. Scroll the chat to the bottom.
-- [ ] **Browser tab 1:** https://appcon2026-team-triecode-kaintabe.vercel.app (public live map). Hide the bookmarks bar and close other tabs.
+- [ ] **Browser tab 1:** https://kaintabe.vercel.app (public live map). Hide the bookmarks bar and close other tabs.
 - [ ] **Browser tab 2:** the same URL with `#impact` (Impact tab).
 - [ ] **Terminal:** type `demo claim`, `demo confirm`, `demo post`, `demo post --far`, `demo escalate` and `demo post --sale 150` once each, then delete the lines, so they're in the history.
 - [ ] **Links ready to paste into the meeting chat at the end:** the map URL, `t.me/KainTabe_bot` and the GitHub repo.

@@ -4,7 +4,7 @@
 
 Restaurants, bakeries and households message surplus food to a **Telegram bot**. The listing appears on a **live map** with a countdown. The **nearest partner kitchen** gets an alert and claims it in one tap. If nobody claims it, the **search radius widens** on its own, and at the limit nearby **individuals get a flash offer**. Pickups are **confirmed with a photo**, and an **impact dashboard** counts the kilograms, meals and CO₂e saved.
 
-- **Live map:** https://appcon2026-team-triecode-kaintabe.vercel.app (public view: approximate areas only)
+- **Live map:** https://kaintabe.vercel.app (public view: approximate areas only)
 - **Bot:** [@KainTabe_bot](https://t.me/KainTabe_bot)
 - **Demo run sheet:** [docs/DEMO.md](docs/DEMO.md)
 

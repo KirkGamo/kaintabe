@@ -39,7 +39,7 @@ from app import db  # noqa: E402
 from app.config import ENV_FILE, settings  # noqa: E402
 from app.services import notify, repo, storage, telegram  # noqa: E402
 
-PROD_WEB_URL = "https://appcon2026-team-triecode-kaintabe.vercel.app"
+PROD_WEB_URL = "https://kaintabe.vercel.app"
 DEMO_MINUTES = 1
 REAL_TIMERS = {"widen_after_minutes": 10, "sale_window_minutes": 60}
 
