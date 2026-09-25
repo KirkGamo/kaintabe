@@ -48,7 +48,7 @@ ORG_PICK, ORG_NAME, ORG_KIND, ORG_LOCATION, ORG_RADIUS, ORG_HOURS, ORG_CAPACITY 
 
 ORG_KINDS = [("🍲 Community kitchen", "community_kitchen"), ("🏠 Shelter", "shelter"),
              ("🏦 Food bank", "food_bank"), ("🧺 Pantry", "pantry")]
-ORG_RADII_KM = [3, 5, 8]
+ORG_RADII_KM = [2, 3, 5]  # listings reach at most radius_max_m (5 km), so a wider area would mislead
 # Posting states
 FOOD, QUANTITY, WEIGHT, HOURS, PICKUP, PICKUP_NEW, SAFETY, AI_CONFIRM, LISTING_TYPE, PRICE, PHOTO_PURPOSE = range(10, 21)
 

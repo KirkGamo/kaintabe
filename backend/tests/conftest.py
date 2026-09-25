@@ -10,10 +10,37 @@ CITY_PROPER = "00000000-0000-0000-0000-00000000a003"
 DEMO_DONOR = "00000000-0000-0000-0000-00000000d003"  # Household in Jaro
 
 
+SEED_SQL = Path(__file__).resolve().parents[2] / "supabase" / "seed.sql"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def seed_rows():
+    """Tests use the seeded pantries and demo donors. The live database may have been emptied
+    (demo.py wipe --all), so add them for this run if missing and remove what we added afterwards."""
+    with db.connect() as c:
+        had = {r["id"] for r in c.execute("select id from recipients union all select id from donors")}
+        c.execute(SEED_SQL.read_text(encoding="utf-8"))  # idempotent: on conflict do nothing
+        added = [str(r["id"]) for r in c.execute("select id from recipients union all select id from donors")
+                 if r["id"] not in had and str(r["id"]).startswith("00000000-0000-0000-0000-")]
+    yield
+    if added:
+        with db.connect() as c:
+            c.execute("delete from claims where recipient_id = any(%s::uuid[])"
+                      " or donation_id in (select id from donations where donor_id = any(%s::uuid[]))", (added, added))
+            c.execute("delete from donations where donor_id = any(%s::uuid[])", (added,))
+            c.execute("delete from recipients where id = any(%s::uuid[])", (added,))
+            c.execute("delete from donors where id = any(%s::uuid[])", (added,))
+
+
 @pytest.fixture
 def conn():
-    """DB connection whose changes are rolled back after the test."""
+    """DB connection whose changes are rolled back after the test.
+
+    The SQL tests were written for a 2 km start and 8 km max reach; pin those here (rolled back
+    with everything else) so tuning the live app_config doesn't break them."""
     c = db.connect()
+    c.execute("update app_config set value = 2000 where key = 'radius_start_m'")
+    c.execute("update app_config set value = 8000 where key = 'radius_max_m'")
     try:
         yield c
     finally:

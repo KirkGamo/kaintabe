@@ -185,7 +185,9 @@ def test_post_with_caption_and_saved_location(upload):
     assert d["donor_name"] == "Test Bakery"
     assert d["photo_url"] == "https://example.com/photo.jpg"
     assert d["status"] == "posted"
-    assert d["search_radius_m"] == 2000
+    with db.connect() as conn:  # starts at the live start radius (app_config), whatever it is tuned to
+        start = conn.execute("select value::int v from app_config where key = 'radius_start_m'").fetchone()["v"]
+    assert d["search_radius_m"] == start
     assert d["safety_checklist"] == {"hygienic": True, "safe_temperature": True, "contents_known": True}
     left = d["expires_at"] - datetime.now(timezone.utc)
     assert timedelta(hours=3, minutes=58) < left <= timedelta(hours=4)

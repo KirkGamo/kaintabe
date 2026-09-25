@@ -16,7 +16,7 @@ Usage (from repo root):
     backend/.venv/Scripts/python scripts/demo.py post --sale 150    # a discount sale instead
     backend/.venv/Scripts/python scripts/demo.py claim              # stand-in org claims your newest listing
     backend/.venv/Scripts/python scripts/demo.py confirm            # ...and confirms the pickup (thank-you to you)
-    backend/.venv/Scripts/python scripts/demo.py escalate           # jump a listing to 8 km + flash offers now
+    backend/.venv/Scripts/python scripts/demo.py escalate           # jump a listing to max reach + flash offers now
     backend/.venv/Scripts/python scripts/demo.py reset              # real timers back, remove stand-in listings
     backend/.venv/Scripts/python scripts/demo.py wipe [--yes]       # start from scratch (keeps seed + sample history)
     backend/.venv/Scripts/python scripts/demo.py wipe --all [--yes] # ...including the seed: an empty database
@@ -196,7 +196,7 @@ def cmd_post(ctx: Ctx, a) -> None:
     org = post_anchor(ctx)
     if not org:
         sys.exit(f"You have no org or individual on @{ctx.bot} yet, so there's nowhere to post near.")
-    km = 2.6 if a.far else 0.8  # far: past the 2 km start, inside 4 km and a 3 km personal reach
+    km = 2.6 if a.far else 0.8  # far: beyond the start radius, inside 4 km and a 3 km personal reach
     angle = random.uniform(0, 6.283)
     lat = org["lat"] + km * KM_LAT * math.sin(angle)
     lng = org["lng"] + km * KM_LAT * math.cos(angle) / math.cos(math.radians(org["lat"]))
@@ -212,8 +212,10 @@ def cmd_post(ctx: Ctx, a) -> None:
     print(f"{donor['name']} posted {d['food_type']} ({d['quantity']}) {km:g} km from {org['name']}"
           f"{f' for P{a.sale:g}' if a.sale else ''}  id={str(d['id'])[:8]}")
     if a.far:
-        print("It starts with a 2 km search radius; your org gets the alert once it widens to 4 km "
-              "(about one widen period).")
+        with db.connect() as conn:
+            cfg = {r["key"]: float(r["value"]) for r in conn.execute("select key, value from app_config")}
+        print(f"It starts with a {cfg['radius_start_m'] / 1000:g} km search radius and doubles every "
+              f"{cfg['widen_after_minutes']:g} min; your org gets the alert once it reaches {km:g} km.")
     else:
         print("If you're playing the org (/demo org), its alert arrives within a few seconds.")
 

@@ -256,10 +256,13 @@ def welcome_listing(conn, donor_id=None, status="posted"):
 
 
 def test_new_user_welcome_explains_and_shows_numbers():
+    with db.connect() as conn:  # one confirmed pickup, so the totals aren't zero even on an empty database
+        done = welcome_listing(conn, status="completed")
+        conn.execute("insert into claims (donation_id, recipient_id, confirmed_at) values (%s, %s, now())", (done, JARO))
     fake = run(msg(A, "/start"))
     text = next(t for t in texts(fake) if "What brings you here?" in t)
     assert "*How it works*" in text and "1️⃣ A donor sends a photo" in text
-    assert "kg rescued" in text  # the sample history alone makes the totals non-zero
+    assert "kg rescued" in text
 
 
 def test_returning_donor_sees_own_impact_and_live_listings():

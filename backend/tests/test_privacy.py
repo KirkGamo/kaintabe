@@ -156,10 +156,17 @@ def test_public_key_reads_approximate_feed(frontend_env):
     base = frontend_env["VITE_SUPABASE_URL"].rstrip("/") + "/rest/v1"
     key = frontend_env["VITE_SUPABASE_ANON_KEY"]
     h = {"apikey": key, "Authorization": f"Bearer {key}"}
-    rows = httpx.get(f"{base}/public_listings?select=*&limit=5", headers=h).json()
-    assert rows and all(on_grid_center(r["lat"]) and on_grid_center(r["lng"]) for r in rows)
-    assert "donor_name" not in rows[0] and "photo_url" not in rows[0]
-    assert httpx.post(f"{base}/rpc/nearby_donations", headers=h, json={"p_recipient_id": rows[0]["id"]}).status_code in (401, 403, 404)
+    with db.connect() as conn:  # a listing of our own (the live database may be empty)
+        d = insert_donation(conn, food_type="Public feed test", lat=10.72278, lng=122.54766)
+    try:
+        rows = httpx.get(f"{base}/public_listings?select=*&id=eq.{d}", headers=h).json()
+        assert len(rows) == 1 and on_grid_center(rows[0]["lat"]) and on_grid_center(rows[0]["lng"])
+        assert "donor_name" not in rows[0] and "photo_url" not in rows[0]
+        assert httpx.post(f"{base}/rpc/nearby_donations", headers=h,
+                          json={"p_recipient_id": rows[0]["id"]}).status_code in (401, 403, 404)
+    finally:
+        with db.connect() as conn:
+            conn.execute("delete from donations where id = %s", (d,))
 
 
 @pytest.mark.skipif(not _lockdown_applied(), reason="018 lockdown is applied at deploy time")

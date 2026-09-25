@@ -61,7 +61,7 @@ flowchart LR
 
 ```
 posted ──(org claims)──▶ claimed ──(pickup photo)──▶ completed / sold
-  │  every widen period with no claim: radius 2 → 4 → 8 km
+  │  every widen period with no claim: radius 1 → 2 → 4 → 5 km (start/max in app_config)
   ▼
 escalated ──▶ flash offers to individuals ──(claims)──▶ claimed
 Any live listing: past its "good for" time ─▶ expired · donor takes it down ─▶ withdrawn
