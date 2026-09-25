@@ -74,6 +74,16 @@ function buildView(publicListings, identity, now, config, showOthers) {
   return { open, out: [], mine, own, reach: null, hidden: 0 }
 }
 
+// Scroll only the listings panel so the card sits at its top. Not element.scrollIntoView(): that also
+// scrolls the page itself, which pushed the header off-screen with no way back.
+function scrollCardIntoList(card) {
+  let list = card?.parentElement
+  while (list && getComputedStyle(list).overflowY !== 'auto') list = list.parentElement
+  if (!list) return
+  const top = card.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop - 8
+  list.scrollTo({ top, behavior: 'smooth' })
+}
+
 // "3 live now · 1 being picked up"
 function publicSummary(items) {
   const picking = items.filter((i) => i.donation.status === 'claimed').length
@@ -179,10 +189,7 @@ export default function App() {
   function select(d) {
     setSelectedId(d.id)
     if (!isDesktop && sheet === 'peek') setSheet('half')
-    setTimeout(
-      () => document.getElementById(`card-${d.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
-      250,
-    )
+    setTimeout(() => scrollCardIntoList(document.getElementById(`card-${d.id}`)), 250)
   }
 
   useEffect(() => {
