@@ -1,6 +1,8 @@
 import { Fragment, useEffect } from 'react'
 import L from 'leaflet'
-import { AttributionControl, Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import {
+  AttributionControl, Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, useMapEvents, ZoomControl,
+} from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
 
@@ -32,11 +34,24 @@ function KeepSized() {
   return null
 }
 
+// Fly only when a *different* listing is selected. Keyed on the id, not the object: some listings are
+// rebuilt every second (countdowns, merged flash offers), and each rebuild used to re-center the map
+// so you couldn't pan away from the selection.
 function FlyTo({ target }) {
   const map = useMap()
+  const id = target?.id
+  const lat = target?.lat
+  const lng = target?.lng
   useEffect(() => {
-    if (target) map.flyTo([target.lat, target.lng], Math.max(map.getZoom(), 15), { duration: 0.6 })
-  }, [target, map])
+    if (id) map.flyTo([lat, lng], Math.max(map.getZoom(), 15), { duration: 0.6 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new selection should move the map
+  }, [id, map])
+  return null
+}
+
+// A tap on the map itself (not on a pin or area) clears the selection
+function DeselectOnMapClick({ onDeselect }) {
+  useMapEvents({ click: () => onDeselect?.() })
   return null
 }
 
@@ -55,7 +70,7 @@ const APPROX_AREA_M = 300
  * compact: phone layout — the listings sheet covers the bottom, so the map credit goes top-left
  */
 export default function MapView({
-  items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, now, compact = false,
+  items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, onDeselect, now, compact = false,
 }) {
   const canReach = new Set(kitchensInReach.map((k) => k.id))
   return (
@@ -66,6 +81,7 @@ export default function MapView({
       />
       <KeepSized />
       <FlyTo target={selected} />
+      <DeselectOnMapClick onDeselect={onDeselect} />
       {/* top-right: the phone listings sheet covers the bottom of the map */}
       <ZoomControl position="topright" />
       <AttributionControl position={compact ? 'topleft' : 'bottomright'} />
@@ -136,6 +152,7 @@ export default function MapView({
               key={d.id}
               center={[d.lat, d.lng]}
               radius={APPROX_AREA_M}
+              bubblingMouseEvents={false}
               pathOptions={{ color, weight: isSelected ? 3 : 1.5, fillColor: color, fillOpacity: isSelected ? 0.35 : 0.2 }}
               eventHandlers={{ click: () => onSelect(d) }}
             >
@@ -190,6 +207,7 @@ export default function MapView({
               <Circle
                 center={[claimer.claimer_lat, claimer.claimer_lng]}
                 radius={APPROX_AREA_M}
+                bubblingMouseEvents={false}
                 pathOptions={{ color: '#7c3aed', weight: 1.5, fillColor: '#7c3aed', fillOpacity: 0.15 }}
               >
                 <Popup>

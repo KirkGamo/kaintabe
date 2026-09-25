@@ -187,6 +187,7 @@ export default function App() {
 
   // Selecting a pin shows its card: open the sheet (phones) and scroll the card into view
   function select(d) {
+    if (d.id === selectedId) return setSelectedId(null) // tap the selected one again to deselect
     setSelectedId(d.id)
     if (!isDesktop && sheet === 'peek') setSheet('half')
     setTimeout(() => scrollCardIntoList(document.getElementById(`card-${d.id}`)), 250)
@@ -427,6 +428,7 @@ export default function App() {
               compact={!isDesktop}
               selected={selected}
               onSelect={select}
+              onDeselect={() => setSelectedId(null)}
               now={now}
             />
           </section>
