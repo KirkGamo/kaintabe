@@ -20,6 +20,18 @@ function pinIcon({ color, emoji, size = 34, ring = false, faded = false }) {
   })
 }
 
+// Leaflet measures its box once; when the page's height settles later (Telegram expanding the
+// Mini App, rotating the phone) it must re-measure, or the map stays half grey
+function KeepSized() {
+  const map = useMap()
+  useEffect(() => {
+    const ro = new ResizeObserver(() => map.invalidateSize())
+    ro.observe(map.getContainer())
+    return () => ro.disconnect()
+  }, [map])
+  return null
+}
+
 function FlyTo({ target }) {
   const map = useMap()
   useEffect(() => {
@@ -52,6 +64,7 @@ export default function MapView({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <KeepSized />
       <FlyTo target={selected} />
       {/* top-right: the phone listings sheet covers the bottom of the map */}
       <ZoomControl position="topright" />
@@ -108,7 +121,14 @@ export default function MapView({
         const approx = mode === 'public' || mode === 'out' || mode === 'person'
         const greyed = mode === 'out' || (mode === 'person' && !inReach)
         // a flash offer for this individual stands out in the same violet as its card
-        const color = offer ? '#7c3aed' : greyed ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
+        const beingPickedUp = approx && d.status === 'claimed' // public view: claimed, on its way
+        const color = offer
+          ? '#7c3aed'
+          : beingPickedUp
+            ? '#6366f1'
+            : greyed
+              ? '#94a3b8'
+              : URGENCY_COLORS[urgency(fraction)].hex
         const isSelected = selected?.id === d.id
         if (approx) {
           return (
@@ -123,7 +143,7 @@ export default function MapView({
                 <strong>{d.food_type}</strong>
                 {d.listing_type === 'sale' ? ' · 🏷️ for sale' : ''}
                 <br />
-                {formatLeft(leftMs)} left · approximate area
+                {beingPickedUp ? '✔️ Claimed: pickup on the way' : `${formatLeft(leftMs)} left`} · approximate area
                 {offer && (
                   <>
                     <br />
@@ -153,25 +173,32 @@ export default function MapView({
         const claimer = own && d.status === 'claimed' && d.claimer_lat != null ? d : null
         return (
           <Fragment key={d.id}>
-            {claimer &&
-              (claimer.claimer_type === 'individual' ? (
-                <Circle
-                  center={[claimer.claimer_lat, claimer.claimer_lng]}
-                  radius={APPROX_AREA_M}
-                  pathOptions={{ color: '#7c3aed', weight: 1.5, fillColor: '#7c3aed', fillOpacity: 0.15 }}
-                >
-                  <Popup>
-                    🙋 <strong>{claimer.claimer_name}</strong> is picking up {d.food_type}
-                    <br />
-                    Approximate area only
-                  </Popup>
-                </Circle>
-              ) : (
-                <Polyline
-                  positions={[[claimer.claimer_lat, claimer.claimer_lng], [d.lat, d.lng]]}
-                  pathOptions={{ color: '#4f46e5', weight: 2, opacity: 0.6, dashArray: '6 6' }}
-                />
-              ))}
+            {/* a dashed line from whoever claimed it to the food: from a kitchen's spot, or from the
+                center of a neighbor's approximate area (never their exact spot) */}
+            {claimer && (
+              <Polyline
+                positions={[[claimer.claimer_lat, claimer.claimer_lng], [d.lat, d.lng]]}
+                pathOptions={{
+                  color: claimer.claimer_type === 'individual' ? '#7c3aed' : '#4f46e5',
+                  weight: 2,
+                  opacity: 0.6,
+                  dashArray: '6 6',
+                }}
+              />
+            )}
+            {claimer?.claimer_type === 'individual' && (
+              <Circle
+                center={[claimer.claimer_lat, claimer.claimer_lng]}
+                radius={APPROX_AREA_M}
+                pathOptions={{ color: '#7c3aed', weight: 1.5, fillColor: '#7c3aed', fillOpacity: 0.15 }}
+              >
+                <Popup>
+                  🙋 <strong>{claimer.claimer_name}</strong> is picking up {d.food_type}
+                  <br />
+                  Approximate area only
+                </Popup>
+              </Circle>
+            )}
             {/* Search circles: always for the donor's own food; for recipients only when selected
                 (their own pickup area is drawn instead). Outline-only so overlaps stay readable. */}
             {(own || (mode === 'open' && isSelected)) && d.status !== 'claimed' && (

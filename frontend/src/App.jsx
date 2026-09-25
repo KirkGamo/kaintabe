@@ -62,12 +62,23 @@ function buildView(publicListings, identity, now, config, showOthers) {
       .sort((a, b) => (b.offer ? 1 : 0) - (a.offer ? 1 : 0) || a.distance - b.distance)
     return { open, out: [], mine, own, reach: { lat: individual.lat, lng: individual.lng, radius }, hidden: 0 }
   }
-  const open = others
-    .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at))
-    .map((d) => ({ donation: d, distance: null, mode: 'public' }))
+  // The public sees every listing, including claimed ones on their way to someone (approximate
+  // areas only); live ones first, soonest to expire on top
+  const claimed = publicListings.filter((d) => !exact.has(d.id) && d.status === 'claimed')
+  const open = [
+    ...others.sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at)),
+    ...claimed,
+  ].map((d) => ({ donation: d, distance: null, mode: 'public' }))
   // A donor mainly wants their own food; other donors' listings are one tap away
   if (identity.donor && !showOthers) return { open: [], out: [], mine, own, reach: null, hidden: open.length }
   return { open, out: [], mine, own, reach: null, hidden: 0 }
+}
+
+// "3 live now · 1 being picked up"
+function publicSummary(items) {
+  const picking = items.filter((i) => i.donation.status === 'claimed').length
+  const live = items.length - picking
+  return `${live} live now${picking ? ` · ${picking} being picked up` : ''}`
 }
 
 // #impact opens the dashboard directly (handy as the demo's closing screen)
@@ -278,7 +289,9 @@ export default function App() {
         ? `${own.length} of your listing${own.length === 1 ? '' : 's'}${showOthers ? ` · ${open.length} other${open.length === 1 ? '' : 's'}` : ''}`
         : identity.individual && !viewer
           ? `${inPersonReach} listing${inPersonReach === 1 ? '' : 's'} within your ${reach.radius / 1000} km`
-          : `${open.length} listing${open.length === 1 ? '' : 's'} ${viewer ? 'in your reach' : 'live now'}`}
+          : viewer
+            ? `${open.length} listing${open.length === 1 ? '' : 's'} in your reach`
+            : publicSummary(open)}
       {!viewer && !donorOnly && <span className="font-normal text-slate-400"> · approximate areas</span>}
     </>
   )
@@ -325,14 +338,22 @@ export default function App() {
       {donorOnly && showOthers && open.length > 0 && (
         <h2 className="text-sm font-semibold text-slate-500 px-1 pt-1">Other listings (approximate areas)</h2>
       )}
-      {!donorOnly && open.length === 0 && (
-        <div className="text-center text-slate-500 text-sm py-8">
-          <div className="text-4xl mb-2">🌱</div>
-          {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
-          <br />
-          New listings appear here instantly.
-        </div>
-      )}
+      {!donorOnly &&
+        open.length === 0 &&
+        // the big empty state only when the panel would otherwise be empty; next to pickups or
+        // not-yet-in-reach food, a one-line note is enough
+        (mine.length || out.length || own.length ? (
+          <p className="text-xs text-slate-500 px-1 pt-1">
+            🌱 {viewer ? 'Nothing claimable in your reach right now.' : 'No other surplus food listed right now.'}
+          </p>
+        ) : (
+          <div className="text-center text-slate-500 text-sm py-8">
+            <div className="text-4xl mb-2">🌱</div>
+            {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
+            <br />
+            New listings appear here instantly.
+          </div>
+        ))}
       {open.map(card)}
 
       {out.length > 0 && (
@@ -345,11 +366,10 @@ export default function App() {
   )
 
   return (
-    // Inside Telegram, --tg-viewport-stable-height excludes Telegram's own chrome; elsewhere it's the full screen
-    <div
-      className="flex flex-col bg-slate-50 text-slate-900 overflow-hidden"
-      style={{ height: 'var(--tg-viewport-stable-height, 100dvh)' }}
-    >
+    // 100dvh = the visible screen, inside Telegram too (the Mini App is expanded on open). Not
+    // Telegram's --tg-viewport-stable-height: it's set while the app is still half-open and, when the
+    // "expanded" update is missed, the page stayed half-height with everything below blank.
+    <div className="flex flex-col bg-slate-50 text-slate-900 overflow-hidden" style={{ height: '100dvh' }}>
       <header className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-3 sm:px-4 py-1.5 sm:py-2 bg-white border-b border-slate-200 z-10">
         <div className="flex items-center gap-2">
           <span className="text-xl sm:text-2xl">🍱</span>

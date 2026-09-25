@@ -174,7 +174,14 @@ export default function DonationCard({
         </p>
       )}
 
+      {mode === 'public' && d.status === 'claimed' && (
+        <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
+          ✔️ Claimed: pickup on the way
+        </p>
+      )}
+
       {mode === 'public' &&
+        d.status !== 'claimed' &&
         (inTelegram ? (
           <p className="mt-3 text-center text-sm text-slate-500">
             Partner kitchens claim here. Register yours with /start in the bot.
