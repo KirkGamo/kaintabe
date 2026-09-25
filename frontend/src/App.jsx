@@ -426,6 +426,7 @@ export default function App() {
               reach={reach}
               kitchensInReach={kitchensInReach}
               compact={!isDesktop}
+              sheetSnap={isDesktop ? null : sheet}
               selected={selected}
               onSelect={select}
               onDeselect={() => setSelectedId(null)}

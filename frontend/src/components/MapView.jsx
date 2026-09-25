@@ -5,6 +5,7 @@ import {
 } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
+import { MIN_PEEK_PX, SNAPS } from '../lib/sheet'
 
 const ILOILO = [10.7102, 122.5553]
 
@@ -37,13 +38,20 @@ function KeepSized() {
 // Fly only when a *different* listing is selected. Keyed on the id, not the object: some listings are
 // rebuilt every second (countdowns, merged flash offers), and each rebuild used to re-center the map
 // so you couldn't pan away from the selection.
-function FlyTo({ target }) {
+// coveredPx(mapHeight): how much of the map's bottom the phone's listings sheet hides; the pin is
+// centered in the part of the map you can actually see, above the sheet
+function FlyTo({ target, coveredPx }) {
   const map = useMap()
   const id = target?.id
   const lat = target?.lat
   const lng = target?.lng
   useEffect(() => {
-    if (id) map.flyTo([lat, lng], Math.max(map.getZoom(), 15), { duration: 0.6 })
+    if (!id) return
+    const zoom = Math.max(map.getZoom(), 15)
+    const hidden = coveredPx ? coveredPx(map.getSize().y) : 0
+    // aim the map's center half the hidden strip *below* the pin, so the pin sits mid-visible-area
+    const center = map.unproject(map.project([lat, lng], zoom).add([0, hidden / 2]), zoom)
+    map.flyTo(center, zoom, { duration: 0.6 })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new selection should move the map
   }, [id, map])
   return null
@@ -68,11 +76,16 @@ const APPROX_AREA_M = 300
  *   area instead of every listing's search circle; a listing's circle shows only when it's selected.
  * kitchensInReach: (donor view) kitchens whose pickup area covers the donor's spot, highlighted
  * compact: phone layout — the listings sheet covers the bottom, so the map credit goes top-left
+ * sheetSnap: (phones) the sheet's position, so a selected pin is centered above it
  */
 export default function MapView({
   items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, onDeselect, now, compact = false,
+  sheetSnap = null,
 }) {
   const canReach = new Set(kitchensInReach.map((k) => k.id))
+  const coveredPx = sheetSnap
+    ? (h) => (sheetSnap === 'peek' ? Math.max(h * SNAPS.peek, MIN_PEEK_PX) : h * SNAPS[sheetSnap])
+    : null
   return (
     <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false} attributionControl={false}>
       <TileLayer
@@ -80,7 +93,7 @@ export default function MapView({
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <KeepSized />
-      <FlyTo target={selected} />
+      <FlyTo target={selected} coveredPx={coveredPx} />
       <DeselectOnMapClick onDeselect={onDeselect} />
       {/* top-right: the phone listings sheet covers the bottom of the map */}
       <ZoomControl position="topright" />
