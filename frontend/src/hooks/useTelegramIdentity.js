@@ -40,8 +40,12 @@ export function useTelegramIdentity(changedAt) {
       .then((c) => setBotUrl(`https://t.me/${c.bot_username}`))
       .catch(() => {})
     if (!inTelegram) return
-    window.Telegram.WebApp.ready()
-    window.Telegram.WebApp.expand()
+    const tg = window.Telegram.WebApp
+    tg.ready()
+    tg.expand()
+    // Otherwise a downward swipe in the listings sheet minimizes the Mini App instead of scrolling
+    // (Telegram 7.7+; older clients don't have it)
+    tg.disableVerticalSwipes?.()
     refresh()
   }, [inTelegram, refresh])
 
