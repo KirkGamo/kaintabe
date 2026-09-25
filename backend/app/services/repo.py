@@ -354,11 +354,19 @@ def pending_pickups(recipient_ids: list) -> list[dict]:
 
 
 def donor_listings(donor_id) -> list[dict]:
-    """The donor's own live or claimed listings, exact, with who claimed them."""
+    """The donor's own live or claimed listings, exact, with who claimed them.
+
+    Where the claimer is: a kitchen's exact spot (a public place), but an individual only as the
+    ~500 m cell center (their spot is usually their home) - and only while the pickup is pending,
+    since completed listings aren't returned here.
+    """
     with db.connect() as conn:
         return conn.execute(
             f"""
-            select {LISTING_COLS}, r.name as claimer_name
+            select {LISTING_COLS}, r.name as claimer_name, r.type as claimer_type,
+                   case when r.type = 'individual' then snap_to_grid(r.lat) else r.lat end as claimer_lat,
+                   case when r.type = 'individual' then snap_to_grid(r.lng) else r.lng end as claimer_lng,
+                   st_distance(d.location, r.location) as claimer_distance_m
               from donations d
               left join claims c on c.donation_id = d.id
               left join recipients r on r.id = c.recipient_id
@@ -368,6 +376,86 @@ def donor_listings(donor_id) -> list[dict]:
             """,
             (donor_id,),
         ).fetchall()
+
+
+_OFFER_TABLES = {"flash": "flash_offers", "alert": "org_alerts"}
+
+
+def remember_offer_message(kind: str, donation_id, recipient_id, message_id: int) -> None:
+    """Store the Telegram message that carried a flash offer ('flash') or org alert ('alert')."""
+    with db.connect() as conn:
+        conn.execute(
+            f"update {_OFFER_TABLES[kind]} set message_id = %s where donation_id = %s and recipient_id = %s",
+            (message_id, donation_id, recipient_id),
+        )
+
+
+def offer_messages(donation_id) -> list[dict]:
+    """Every flash-offer / org-alert message sent for this listing, and to whom."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select o.recipient_id, r.telegram_chat_id as chat_id, o.message_id
+              from (select recipient_id, message_id from flash_offers where donation_id = %(d)s
+                    union all
+                    select recipient_id, message_id from org_alerts where donation_id = %(d)s) o
+              join recipients r on r.id = o.recipient_id
+             where o.message_id is not null and r.telegram_chat_id is not null
+            """,
+            {"d": donation_id},
+        ).fetchall()
+
+
+def claim_of(donation_id) -> dict | None:
+    """The current claim on a listing with what an 'it's yours' message needs, if it's claimed."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select c.recipient_id, c.reserved_price, d.food_type, d.quantity, d.lat, d.lng
+              from claims c join donations d on d.id = c.donation_id
+             where c.donation_id = %s and c.confirmed_at is null and d.status = 'claimed'
+            """,
+            (donation_id,),
+        ).fetchone()
+
+
+def open_flash_offers(recipient_id) -> list[dict]:
+    """Flash offers this individual got that are still up for grabs, with what the Telegram offer
+    already told them (food, donor, distance). The exact spot comes only after they claim."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select d.id, d.food_type, d.quantity, d.donor_name, d.photo_url,
+                   st_distance(d.location, r.location) as distance_m
+              from flash_offers f
+              join donations d on d.id = f.donation_id
+              join recipients r on r.id = f.recipient_id
+             where f.recipient_id = %s and d.status = 'escalated' and d.expires_at > now()
+             order by distance_m
+            """,
+            (recipient_id,),
+        ).fetchall()
+
+
+def was_offered(donation_id: str, recipient_id) -> bool:
+    with db.connect() as conn:
+        return conn.execute(
+            "select 1 from flash_offers where donation_id = %s and recipient_id = %s", (donation_id, recipient_id)
+        ).fetchone() is not None
+
+
+def neighbors_near(lat: float, lng: float, via_bot: str) -> int:
+    """How many people on this bot's flash-offer list could get food posted at this spot
+    (it's within their own pickup range). A count only: individuals' locations stay private."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select count(*) n from recipients
+             where type = 'individual' and active and via_bot = %s and telegram_chat_id is not null
+               and st_dwithin(location, st_setsrid(st_makepoint(%s, %s), 4326)::geography, service_radius_m)
+            """,
+            (via_bot, lng, lat),
+        ).fetchone()["n"]
 
 
 # --- numbers for the /start welcome ------------------------------------------------------

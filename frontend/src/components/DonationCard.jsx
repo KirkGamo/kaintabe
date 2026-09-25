@@ -34,15 +34,24 @@ function ReachBadge({ donation: d, config, now }) {
   )
 }
 
+function formatEta(ms) {
+  const min = Math.round(ms / 60000)
+  if (min < 1) return 'under a minute'
+  return min < 60 ? `about ${min} min` : `about ${Math.floor(min / 60)} h ${min % 60} min`
+}
+
 /**
  * mode: 'open'   — in range of the signed-in org, claimable
- *       'mine'   — claimed by that org, awaiting pickup
- *       'public' — no org identity: read-only, approximate, points people to the Telegram bot
+ *       'mine'   — claimed by that org/individual, awaiting pickup
+ *       'out'    — (org) approximate, its reach doesn't cover the org yet: `eta` = ms until it does, or null
+ *       'person' — (individual) approximate; `inReach` = within their own pickup range;
+ *                  `offer` = flash-offered to them: free to take (I'll pick it up)
+ *       'public' — no identity: read-only, approximate, points people to the Telegram bot
  *       'own'    — the signed-in donor's own listing: Take down (or who claimed it)
  */
 export default function DonationCard({
-  donation: d, mode, distance, now, config, claim, selected, onSelect, onClaim, onConfirm, onTakeDown, busy, botUrl,
-  inTelegram,
+  donation: d, mode, distance, eta, inReach, offer, reachKm, now, config, claim, selected, onSelect, onClaim, onConfirm,
+  onTakeDown, busy, botUrl, inTelegram,
 }) {
   const { leftMs, fraction } = timeLeft(d, now)
   const mine = mode === 'mine'
@@ -91,7 +100,15 @@ export default function DonationCard({
           )}
           <p className="text-xs text-slate-500 truncate">
             {d.donor_name ? `from ${d.donor_name}` : own ? 'your listing' : 'from a donor nearby (approximate area)'}
-            {distance != null && <> · <span className="font-medium text-slate-700">{formatDistance(distance)} away</span></>}
+            {distance != null && (
+              <>
+                {' · '}
+                <span className="font-medium text-slate-700">
+                  {mode === 'out' || mode === 'person' ? 'about ' : ''}
+                  {formatDistance(distance)} away
+                </span>
+              </>
+            )}
           </p>
           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
             {safetyChecked && <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">✅ Safety checked</span>}
@@ -119,7 +136,52 @@ export default function DonationCard({
         </button>
       )}
 
+      {mode === 'out' && (
+        <p className="mt-3 text-center text-sm text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+          {eta == null
+            ? '📍 Too far: its reach won’t get to you before it expires.'
+            : eta === 0
+              ? '📡 Now within reach. It will move up to your list in a moment.'
+              : `📡 Reaches you in ${formatEta(eta)} if no closer kitchen claims it first.`}
+        </p>
+      )}
+
+      {mode === 'person' && offer && (
+        <>
+          <p className="mt-3 text-center text-sm font-medium text-violet-800 bg-violet-50 rounded-lg px-3 py-2">
+            📣 Flash offer for you: it's free, and the first person to tap gets it.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation()
+              onClaim(d)
+            }}
+            className="mt-2 w-full rounded-lg bg-violet-600 hover:bg-violet-700 active:bg-violet-800 disabled:opacity-60
+              text-white font-semibold py-2.5 min-h-11 transition"
+          >
+            {busy ? 'Claiming…' : "🙋 I'll pick it up"}
+          </button>
+        </>
+      )}
+
+      {mode === 'person' && !offer && (
+        <p className="mt-3 text-center text-sm text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+          {inReach
+            ? '🙋 Kitchens get first pick. If it’s still free when its search reaches the limit, you’ll get a flash offer in Telegram.'
+            : `Outside your ${reachKm ?? 3} km pickup range.`}
+        </p>
+      )}
+
+      {mode === 'public' && d.status === 'claimed' && (
+        <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
+          ✔️ Claimed: pickup on the way
+        </p>
+      )}
+
       {mode === 'public' &&
+        d.status !== 'claimed' &&
         (inTelegram ? (
           <p className="mt-3 text-center text-sm text-slate-500">
             Partner kitchens claim here. Register yours with /start in the bot.
@@ -164,8 +226,10 @@ export default function DonationCard({
       {own &&
         (d.status === 'claimed' ? (
           leftMs > 0 ? (
-            <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 text-center">
-              ✔️ Claimed by {d.claimer_name ?? 'someone'}, they're coming
+            <p className="mt-3 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium py-2 px-3 text-center">
+              {d.claimer_type === 'individual' ? '🙋' : '🏠'} {d.claimer_name ?? 'Someone'}
+              {d.claimer_distance_m != null && ` (${formatDistance(d.claimer_distance_m)} away)`} is coming to pick it
+              up
             </p>
           ) : (
             <p className="mt-3 rounded-lg bg-slate-100 text-slate-600 text-sm py-2 px-3 text-center">

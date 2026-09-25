@@ -32,7 +32,7 @@ from telegram.ext import (
 )
 
 from app.config import settings
-from app.services import ai_intake, notify, repo, storage
+from app.services import ai_intake, notify, offer_messages, repo, storage
 from app.services import telegram as tg_out  # outgoing messages to other chats (e.g. the donor)
 from app.services.notify import md
 
@@ -944,10 +944,13 @@ async def org_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         claim = await asyncio.to_thread(repo.claim_donation, donation_id, str(org["id"]))
     except repo.NotAvailable:
+        if await already_yours(query, donation_id, org["id"]):
+            return
         await query.answer("Already claimed or no longer available 😔")
         await query.edit_message_text(f"{query.message.text}\n\n😔 Someone else got this one first, or it's no longer available.")
         return
     await query.answer("It's yours! 🎉")
+    await offer_messages.close(donation_id, claim, bot_edit(context), skip_message_id=query.message.message_id)
     directions = f"https://www.google.com/maps/dir/?api=1&destination={claim['lat']},{claim['lng']}"
     paid = (f"🛒 Reserved for *₱{float(claim['reserved_price']):g}*: pay the donor in person at pickup.\n\n"
             if claim["reserved_price"] is not None else "")
@@ -972,19 +975,36 @@ async def flash_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         claim = await asyncio.to_thread(repo.claim_donation, donation_id, str(person["id"]))
     except repo.NotAvailable:
+        if await already_yours(query, donation_id, person["id"]):
+            return
         await query.answer("Someone else got it first 😔")
         await query.edit_message_text(
             f"{query.message.text}\n\n😔 Someone else got this one first. I'll message you about the next one."
         )
         return
     await query.answer("It's yours! 🎉")
-    await query.edit_message_text(
-        f"✅ *It's yours!* {md(claim['food_type'])} ({md(claim['quantity'])})\n\n"
-        f"📍 Pick it up here: https://www.google.com/maps/dir/?api=1&destination={claim['lat']},{claim['lng']}\n\n"
-        "📸 When you have it, *send a photo of it here* to confirm the pickup.",
-        parse_mode="Markdown",
-    )
+    await query.edit_message_text(offer_messages.yours_text(claim), parse_mode="Markdown")
+    await offer_messages.close(donation_id, claim, bot_edit(context), skip_message_id=query.message.message_id)
     await tg_out.send_message(claim["donor_chat_id"], notify.claimed_text(claim))
+
+
+def bot_edit(context: ContextTypes.DEFAULT_TYPE):
+    """offer_messages.Edit through this bot (so tests' fake Telegram sees it too)."""
+    async def edit(chat_id: int, message_id: int, text: str):
+        return await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                                   parse_mode="Markdown", disable_web_page_preview=True)
+    return edit
+
+
+async def already_yours(query, donation_id: str, recipient_id) -> bool:
+    """A tap on an old offer/alert for food this chat already claimed (e.g. on the map): say so and
+    show the pickup details, instead of 'someone else got it'."""
+    claim = await asyncio.to_thread(repo.claim_of, donation_id)
+    if not claim or str(claim["recipient_id"]) != str(recipient_id):
+        return False
+    await query.answer("You already claimed this 👍")
+    await query.edit_message_text(offer_messages.yours_text(claim), parse_mode="Markdown")
+    return True
 
 
 def _time_left(expires_at) -> str:

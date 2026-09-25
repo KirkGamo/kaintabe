@@ -43,9 +43,12 @@ async def send_pending(bot) -> int:
     sent = 0
     for a in alerts:
         try:
-            await bot.send_message(chat_id=a["chat_id"], text=alert_text(a), parse_mode="Markdown",
-                                   reply_markup=alert_keyboard(a))
+            msg = await bot.send_message(chat_id=a["chat_id"], text=alert_text(a), parse_mode="Markdown",
+                                         reply_markup=alert_keyboard(a))
             sent += 1
+            # remembered so the alert can be updated once someone claims the food (offer_messages)
+            await asyncio.to_thread(repo.remember_offer_message, "alert", a["donation_id"], a["recipient_id"],
+                                    msg.message_id)
         except Exception as e:  # noqa: BLE001 - one unreachable org mustn't stop the rest
             log.warning("org alert to %s failed: %s", a["chat_id"], type(e).__name__)
     if alerts:

@@ -33,6 +33,31 @@ export function reachState(d, config, now) {
 }
 
 /**
+ * When a listing's reach (search radius) will cover a spot `distM` metres away, mirroring
+ * widen_unclaimed(): donations double their radius every widen period up to the max; a sale
+ * first becomes a free donation after the sale window, then widens the same way.
+ *  { ms: 0 }       already reaches it
+ *  { ms: n }       reaches it in about n ms (if nobody claims it first)
+ *  { ms: null }    never: farther than the max reach, or not before the food expires
+ */
+export function reachEta(d, distM, config, now) {
+  const max = config.radius_max_m
+  let r = d.search_radius_m
+  if (d.status === 'escalated' || r >= distM) return { ms: r >= distM ? 0 : null }
+  if (distM > max) return { ms: null }
+  const W = config.widen_after_minutes * 60000
+  const since = new Date(d.radius_widened_at).getTime()
+  let t = d.listing_type === 'sale' ? since + config.sale_window_minutes * 60000 + W : since + W
+  while (r < distM) {
+    r = Math.min(r * 2, max)
+    if (r >= distM) break
+    t += W
+  }
+  const expires = new Date(d.expires_at).getTime()
+  return { ms: t < expires ? Math.max(0, t - now) : null }
+}
+
+/**
  * Sale listings: price now and time until it turns into a free donation.
  * Mirrors decay_sale_prices() in SQL; the server's price is what gets locked on reserve.
  */

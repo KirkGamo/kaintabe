@@ -181,3 +181,40 @@ def test_donor_can_join_flash_list_and_confirm_by_photo(mocks):
             assert any("also on the flash-offer list" in t for t in bot.texts_to(A))
 
     asyncio.run(go())
+
+
+def edits_to(bot, chat):
+    return [p for e, p in bot.fake.sent if e == "editMessageText" and str(p.get("chat_id")) == str(chat)]
+
+
+def test_claim_closes_the_same_offer_for_everyone_else(mocks):
+    """Once A takes it, B's offer message says it's gone and loses its button (no dead taps)."""
+    async def go():
+        async with Harness() as bot:
+            await bot.send(*opt_in(A, name="Ana"), *opt_in(B))
+            d = escalated_listing()
+            await flash.send_pending(bot.app.bot)
+            await bot.send(tap(A, f"flash:{d}"))
+            b_edits = edits_to(bot, B)
+            assert b_edits and "claimed by someone else" in b_edits[-1]["text"]
+            assert "reply_markup" not in b_edits[-1]  # the 🙋 button is gone
+
+    asyncio.run(go())
+
+
+def test_tap_after_claiming_on_the_map_says_its_already_yours(mocks):
+    """Regression: claiming on the map left the chat offer live; tapping it said 'someone else got it'."""
+    async def go():
+        async with Harness() as bot:
+            await bot.send(*opt_in(A))
+            d = escalated_listing()
+            await flash.send_pending(bot.app.bot)
+            person = h.repo.get_individual(A, "test_bot")
+            h.repo.claim_donation(str(d), str(person["id"]))  # as the map does
+            await bot.send(tap(A, f"flash:{d}"))
+            answers = [p for e, p in bot.fake.sent if e == "answerCallbackQuery"]
+            assert "already claimed this" in answers[-1].get("text", "")
+            assert "It's yours" in edits_to(bot, A)[-1]["text"]
+            assert not any("Someone else got" in t for t in bot.texts_to(A))
+
+    asyncio.run(go())

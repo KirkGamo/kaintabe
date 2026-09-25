@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-// Visible share of the parent's height at each snap point
-const SNAPS = { peek: 0.2, half: 0.52, full: 0.92 }
-const MIN_PEEK_PX = 96 // the handle + summary line must always fit
+import { MIN_PEEK_PX, SNAPS } from '../lib/sheet'
 
 /**
  * Phone-only listings panel over a full-screen map. Drag the handle (or tap it) to move
@@ -101,7 +99,13 @@ export default function BottomSheet({ snap, onSnap, summary, children }) {
         <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300" />
         <div className="mt-2 text-sm font-semibold text-slate-700">{summary}</div>
       </div>
-      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 pb-6 space-y-2">
+      {/* The sheet is always full height and slides down to peek/half, so part of it sits below the
+          screen; padding by that hidden amount lets the last cards scroll up into view */}
+      <div
+        ref={listRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 space-y-2"
+        style={{ paddingBottom: offset + 24 }}
+      >
         {children}
       </div>
     </div>
