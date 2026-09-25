@@ -874,16 +874,14 @@ DEMO_ROLES = {
 
 
 async def demo_switch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Owner-only stage helper: one Telegram account plays one role at a time.
+    """Try every side of KainTabe with one Telegram account: play one role at a time.
 
     /demo donor|org|individual  keep only that role (others parked, restorable)
     /demo fresh                 park every role: /start then behaves like a brand-new user
     /demo all                   bring every parked role back
+    Open to everyone: it only ever parks or restores the sender's own profiles.
     """
     chat_id = update.effective_chat.id
-    if chat_id not in settings.demo_admins:
-        await update.effective_message.reply_text("Sorry, I don't know that command. Send /start to begin.")
-        return END
     context.user_data.clear()  # drop any half-finished draft; this also ends the current conversation
     bot = context.bot.username
     arg = (context.args[0].lower() if context.args else "")
@@ -904,17 +902,19 @@ async def demo_switch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await asyncio.to_thread(repo.restore_role, chat_id, bot, kind)
         text = "🎭 *Demo:* all your roles are back."
     else:
-        text = ("🎭 *Demo role switch*\n\n"
+        text = ("🎭 *Try every role*\n\n"
+                "See KainTabe from each side with this one account:\n"
                 "/demo donor · /demo org · /demo individual: play only that role\n"
-                "/demo fresh: start over as a new user\n"
-                "/demo all: bring every role back")
+                "/demo fresh: start over as a new user, then /start to sign up as any role\n"
+                "/demo all: bring all your roles back\n\n"
+                "Nothing is deleted: roles you're not playing are just set aside.")
 
     roles = await asyncio.to_thread(repo.role_summary, chat_id, bot)
-    lines = [f"{'✅' if r['active'] else '▫️'} {kind}: {md(r['active'] or '-')}"
-             + (f" (set aside: {md(', '.join(r['parked']))})" if r["parked"] else "")
-             for kind, r in roles.items()]
+    role_lines = [f"{'✅' if r['active'] else '▫️'} {kind}: {md(r['active'] or '-')}"
+                  + (f" (set aside: {md(', '.join(r['parked']))})" if r["parked"] else "")
+                  for kind, r in roles.items()]
     await update.effective_message.reply_text(
-        text + "\n\n" + "\n".join(lines), parse_mode="Markdown", reply_markup=ReplyKeyboardRemove()
+        text + "\n\n" + "\n".join(role_lines), parse_mode="Markdown", reply_markup=ReplyKeyboardRemove()
     )
     return END
 

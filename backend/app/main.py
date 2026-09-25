@@ -25,6 +25,7 @@ BOT_COMMANDS = [
     ("mylistings", "See or take down food you posted"),
     ("profile", "Update your donor details"),
     ("stop", "Stop free-food offers"),
+    ("demo", "Try another role: donor, org or individual"),
     ("cancel", "Cancel what you're doing"),
 ]
 

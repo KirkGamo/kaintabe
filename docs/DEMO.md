@@ -17,7 +17,7 @@ backend/.venv/Scripts/python scripts/demo.py
 - **Telegram Desktop is your on-screen phone.** Log it into the same Telegram account as your phone. Every message syncs instantly, so judges see the bot chat in a clear, readable window instead of a tiny phone camera shot.
   - **Clicks happen on the laptop** so judges can follow your cursor: buttons, typing, commands, the 🗺️ Map.
   - **Use the phone only to share a location.** Telegram Desktop can't send locations, so the donor sign-up's location step is done on the phone. The chat on screen updates by itself.
-- **One account plays every role.** Send `/demo donor`, `/demo org` or `/demo individual` to play only that role (the others are set aside, not deleted). `/demo fresh` makes you a brand-new user; `/demo all` brings every role back. Only your chat can use `/demo`.
+- **One account plays every role.** Send `/demo donor`, `/demo org` or `/demo individual` to play only that role (the others are set aside, not deleted). `/demo fresh` makes you a brand-new user; `/demo all` brings every role back. Anyone can use `/demo`, but it only changes their own roles, so judges can try it too.
 - **The script plays everyone else.** A stand-in pantry claims and picks up your food (`demo claim`, `demo confirm`), and stand-in donors post food near you (`demo post`).
 
 ## Screen layout
@@ -100,7 +100,7 @@ small strip at the bottom (see "The terminal" below).
 
 **Short on time?** Cut scene 8, then scene 7. Scenes 1–6 carry the story.
 
-**Invite judges to try it (Q&A):** "The link to the bot is in the chat. Send it a photo if you like." Their posts appear on the live map. After the pitch, `demo wipe` shows what to clean up.
+**Invite judges to try it (Q&A):** "The link to the bot is in the chat. Send it a photo, or type /demo to try the kitchen or neighbor side." Their posts appear on the live map. After the pitch, `demo wipe` shows what to clean up.
 
 **After the pitch:** run `demo reset`. It restores the real timers (10/60 min) and removes the stand-in listings. The sample history stays. Send `/demo all` to get every role back.
 
@@ -117,7 +117,6 @@ small strip at the bottom (see "The terminal" below).
 | `demo claim` says *no stand-in pantry is within range* | The listing is too far from the seeded pantries (they're in Jaro, La Paz and City Proper). Run `demo escalate`, then `demo claim`. |
 | `demo claim` picked the wrong listing | Pass the id prefix shown by `demo status`, e.g. `demo claim 871a338a`. |
 | No org alert after `demo post` | Did you send `/demo org` first? Run `demo status`: *you as org* must show your org on **@KainTabe_bot**. |
-| `/demo` says *I don't know that command* | `DEMO_ADMIN_CHAT_ID` on Railway is missing or wrong. It must be your chat id. |
 | The bot seems stuck on an old question after switching roles | Send `/cancel`, then carry on. |
 | No flash offer in scene 7 | Skip the scene; don't debug live. Later, check `demo status` for *paused* (`/demo individual` turns it back on). |
 | Your internet drops | Switch to the phone hotspot and rejoin the call. If you can't rejoin quickly, a teammate in the call shares the backup video. |

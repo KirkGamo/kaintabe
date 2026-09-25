@@ -178,9 +178,8 @@ def active(chat):
     return {k: r["active"] for k, r in h.repo.role_summary(chat, BOT).items()}
 
 
-def demo(chat, *extra, admin=A):
-    with patch.object(h.settings, "demo_admin_chat_id", str(admin)):
-        return run(*extra) if extra else None
+def demo(chat, *extra):
+    return run(*extra) if extra else None
 
 
 def test_demo_switch_parks_and_restores_roles():
@@ -222,11 +221,18 @@ def test_demo_mid_conversation_ends_the_draft():
     assert not any("Not An Org Name" in t for t in texts(fake))
 
 
-def test_demo_is_owner_only():
+def test_demo_is_open_to_everyone_but_only_touches_own_roles():
     all_three_roles(B)
-    fake = demo(B, msg(B, "/demo fresh"), admin=A)  # B isn't the admin
-    assert any("don't know that command" in t for t in texts(fake))
-    assert active(B)["donor"] == "Test Lugawan"
+    with db.connect() as conn:
+        conn.execute("insert into donors (name, type, lat, lng, telegram_chat_id, pledged_at) "
+                     "values ('Test A', 'household', 10.729, 122.5576, %s, now())", (A,))
+    fake = demo(A, msg(A, "/demo fresh"))
+    assert any("every role set aside" in t for t in texts(fake))
+    assert active(A)["donor"] is None
+    assert active(B) == {"donor": "Test Lugawan", "org": "Bayanihan Pantry Jaro", "individual": "Org"}
+
+    fake = demo(A, msg(A, "/demo"))  # no argument: explains the switch to anyone
+    assert any("Try every role" in t for t in texts(fake))
 
 
 def test_error_message_does_not_blame_connection_for_bugs():

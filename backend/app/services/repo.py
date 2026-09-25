@@ -397,7 +397,7 @@ def rescued_stats(*, donor_id=None, recipient_id=None) -> dict:
     return {"pickups": row["pickups"], "kg": float(row["kg"])}
 
 
-# --- demo role switch (owner-only /demo) ----------------------------------------------
+# --- demo role switch (/demo, anyone) --------------------------------------------------
 # A parked role keeps its row; only the chat link is removed (and remembered in demo_parked).
 
 ROLE_KINDS = ("donor", "org", "individual")
