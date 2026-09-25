@@ -25,8 +25,9 @@ const alive = (d, now) => d.status !== 'claimed' && timeLeft(d, now).leftMs > 0
  *  mine   — org/individual: their claims awaiting pickup (exact)
  *  own    — donor: their own listings (exact, Take down, who claimed them)
  *  reach  — the viewer's own pickup area (org / individual), drawn instead of every listing's circle
+ *  hidden — donor-only viewer: how many other listings are hidden (they see just their own by default)
  */
-function buildView(publicListings, identity, now, config) {
+function buildView(publicListings, identity, now, config, showOthers) {
   const exact = new Set([...identity.inRange, ...identity.myPickups, ...identity.myListings].map((d) => d.id))
   const mine = identity.myPickups.map((d) => ({ donation: d, distance: null, mode: 'mine' }))
   const own = identity.myListings.map((d) => ({ donation: d, distance: null, mode: 'own' }))
@@ -44,7 +45,7 @@ function buildView(publicListings, identity, now, config) {
       })
       .sort((a, b) => (a.eta ?? Infinity) - (b.eta ?? Infinity) || a.distance - b.distance)
     const reach = { lat: org.lat, lng: org.lng, radius: org.service_radius_m }
-    return { open, out, mine, own, reach }
+    return { open, out, mine, own, reach, hidden: 0 }
   }
   if (individual) {
     const radius = individual.radius_m ?? 3000
@@ -59,12 +60,14 @@ function buildView(publicListings, identity, now, config) {
         return { donation: d, distance, mode: 'person', inReach: distance <= radius }
       })
       .sort((a, b) => (b.offer ? 1 : 0) - (a.offer ? 1 : 0) || a.distance - b.distance)
-    return { open, out: [], mine, own, reach: { lat: individual.lat, lng: individual.lng, radius } }
+    return { open, out: [], mine, own, reach: { lat: individual.lat, lng: individual.lng, radius }, hidden: 0 }
   }
   const open = others
     .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at))
     .map((d) => ({ donation: d, distance: null, mode: 'public' }))
-  return { open, out: [], mine, own, reach: null }
+  // A donor mainly wants their own food; other donors' listings are one tap away
+  if (identity.donor && !showOthers) return { open: [], out: [], mine, own, reach: null, hidden: open.length }
+  return { open, out: [], mine, own, reach: null, hidden: 0 }
 }
 
 // #impact opens the dashboard directly (handy as the demo's closing screen)
@@ -142,6 +145,24 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const isDesktop = useIsDesktop()
   const [sheet, setSheet] = useState('peek')
+  // donor-only view: show other donors' listings too (remembered on this device)
+  const [showOthers, setShowOthers] = useState(() => {
+    try {
+      return localStorage.getItem('kt.showOthers') === '1'
+    } catch {
+      return false
+    }
+  })
+  function toggleOthers() {
+    setShowOthers((v) => {
+      try {
+        localStorage.setItem('kt.showOthers', v ? '0' : '1')
+      } catch {
+        /* private mode: still toggles for this visit */
+      }
+      return !v
+    })
+  }
 
   // Selecting a pin shows its card: open the sheet (phones) and scroll the card into view
   function select(d) {
@@ -161,10 +182,11 @@ export default function App() {
 
   // The acting org is proven by Telegram (Mini App); nobody can pick an org by hand
   const viewer = identity.org
-  const { open, out, mine, own, reach } = useMemo(
-    () => buildView(donations, identity, now, config),
-    [donations, identity, now, config],
+  const { open, out, mine, own, reach, hidden } = useMemo(
+    () => buildView(donations, identity, now, config, showOthers),
+    [donations, identity, now, config, showOthers],
   )
+  const donorOnly = Boolean(identity.donor && !identity.org && !identity.individual)
   const mapItems = [...out, ...open, ...own, ...mine]
   // Donor view: kitchens whose own pickup area covers the donor's spot (kitchen locations are public)
   const donor = identity.donor
@@ -252,10 +274,12 @@ export default function App() {
   const summary = (
     <>
       {mine.length ? `${mine.length} pickup${mine.length === 1 ? '' : 's'} · ` : ''}
-      {identity.individual && !viewer
-        ? `${inPersonReach} listing${inPersonReach === 1 ? '' : 's'} within your ${reach.radius / 1000} km`
-        : `${open.length} listing${open.length === 1 ? '' : 's'} ${viewer ? 'in your reach' : 'live now'}`}
-      {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
+      {donorOnly
+        ? `${own.length} of your listing${own.length === 1 ? '' : 's'}${showOthers ? ` · ${open.length} other${open.length === 1 ? '' : 's'}` : ''}`
+        : identity.individual && !viewer
+          ? `${inPersonReach} listing${inPersonReach === 1 ? '' : 's'} within your ${reach.radius / 1000} km`
+          : `${open.length} listing${open.length === 1 ? '' : 's'} ${viewer ? 'in your reach' : 'live now'}`}
+      {!viewer && !donorOnly && <span className="font-normal text-slate-400"> · approximate areas</span>}
     </>
   )
   const listing = (
@@ -283,7 +307,25 @@ export default function App() {
 
       {/* phones show this in the sheet's handle already */}
       {isDesktop && <h2 className="text-sm font-semibold text-slate-600 px-1 pt-1">{summary}</h2>}
-      {open.length === 0 && (
+      {donorOnly && own.length === 0 && (
+        <div className="text-center text-slate-500 text-sm py-6">
+          <div className="text-4xl mb-2">📸</div>
+          No food posted right now. Send a photo in the bot to share food.
+        </div>
+      )}
+      {donorOnly && (
+        <button
+          type="button"
+          onClick={toggleOthers}
+          className="w-full rounded-lg border border-slate-300 hover:bg-slate-50 text-sm font-medium text-slate-700 py-2 min-h-11"
+        >
+          {showOthers ? '🙈 Hide other listings' : `👀 Show other listings (${hidden})`}
+        </button>
+      )}
+      {donorOnly && showOthers && open.length > 0 && (
+        <h2 className="text-sm font-semibold text-slate-500 px-1 pt-1">Other listings (approximate areas)</h2>
+      )}
+      {!donorOnly && open.length === 0 && (
         <div className="text-center text-slate-500 text-sm py-8">
           <div className="text-4xl mb-2">🌱</div>
           {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
