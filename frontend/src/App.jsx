@@ -7,7 +7,8 @@ import { useDonations, useRecipients } from './hooks/useDonations'
 import { useNow } from './hooks/useNow'
 import { useTelegramIdentity } from './hooks/useTelegramIdentity'
 import { claimDonation, confirmPickup, withdrawListing } from './lib/api'
-import { timeLeft } from './lib/urgency'
+import { distanceM } from './lib/geo'
+import { reachEta, timeLeft } from './lib/urgency'
 
 // Charts are heavy; load them only when the Impact tab is opened
 const ImpactDashboard = lazy(() => import('./components/ImpactDashboard'))
@@ -17,27 +18,48 @@ const alive = (d, now) => d.status !== 'claimed' && timeLeft(d, now).leftMs > 0
 /**
  * What this viewer sees. Everyone gets the public feed (approximate areas, no names/photos);
  * exact rows come only from /api/map for the viewer's own roles:
- *  open — org: listings within its reach (exact, claimable) · otherwise: public areas (read-only)
- *  out  — org: public areas of listings its reach doesn't cover yet
- *  mine — org/individual: their claims awaiting pickup (exact)
- *  own  — donor: their own listings (exact, Take down)
+ *  open   — org: listings within its reach (exact, claimable)
+ *           individual: listings by distance, flagged in/out of their pickup range ('person')
+ *           otherwise: public areas (read-only)
+ *  out    — org: public areas of listings whose reach doesn't cover it yet, with an ETA
+ *  mine   — org/individual: their claims awaiting pickup (exact)
+ *  own    — donor: their own listings (exact, Take down, who claimed them)
+ *  reach  — the viewer's own pickup area (org / individual), drawn instead of every listing's circle
  */
-function buildView(publicListings, identity, now) {
+function buildView(publicListings, identity, now, config) {
   const exact = new Set([...identity.inRange, ...identity.myPickups, ...identity.myListings].map((d) => d.id))
   const mine = identity.myPickups.map((d) => ({ donation: d, distance: null, mode: 'mine' }))
   const own = identity.myListings.map((d) => ({ donation: d, distance: null, mode: 'own' }))
   const others = publicListings.filter((d) => !exact.has(d.id) && alive(d, now))
+  const { org, individual } = identity
 
-  if (identity.org) {
+  if (org) {
     const open = identity.inRange
       .filter((d) => alive(d, now))
       .map((d) => ({ donation: d, distance: d.distance_m, mode: 'open' }))
-    return { open, out: others.map((d) => ({ donation: d, distance: null, mode: 'out' })), mine, own }
+    const out = others
+      .map((d) => {
+        const distance = distanceM(org, d)
+        return { donation: d, distance, mode: 'out', eta: reachEta(d, distance, config, now).ms }
+      })
+      .sort((a, b) => (a.eta ?? Infinity) - (b.eta ?? Infinity) || a.distance - b.distance)
+    const reach = { lat: org.lat, lng: org.lng, radius: org.service_radius_m }
+    return { open, out, mine, own, reach }
+  }
+  if (individual) {
+    const radius = individual.radius_m ?? 3000
+    const open = others
+      .map((d) => {
+        const distance = distanceM(individual, d)
+        return { donation: d, distance, mode: 'person', inReach: distance <= radius }
+      })
+      .sort((a, b) => a.distance - b.distance)
+    return { open, out: [], mine, own, reach: { lat: individual.lat, lng: individual.lng, radius } }
   }
   const open = others
     .sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at))
     .map((d) => ({ donation: d, distance: null, mode: 'public' }))
-  return { open, out: [], mine, own }
+  return { open, out: [], mine, own, reach: null }
 }
 
 // #impact opens the dashboard directly (handy as the demo's closing screen)
@@ -134,8 +156,17 @@ export default function App() {
 
   // The acting org is proven by Telegram (Mini App); nobody can pick an org by hand
   const viewer = identity.org
-  const { open, out, mine, own } = useMemo(() => buildView(donations, identity, now), [donations, identity, now])
+  const { open, out, mine, own, reach } = useMemo(
+    () => buildView(donations, identity, now, config),
+    [donations, identity, now, config],
+  )
   const mapItems = [...out, ...open, ...own, ...mine]
+  // Donor view: kitchens whose own pickup area covers the donor's spot (kitchen locations are public)
+  const donor = identity.donor
+  const kitchensInReach = useMemo(
+    () => (donor ? recipients.filter((r) => distanceM(r, donor) <= (r.service_radius_m ?? 0)) : []),
+    [recipients, donor],
+  )
   const selected = mapItems.find((i) => i.donation.id === selectedId)?.donation ?? null
   const home = viewer
     ? { lat: viewer.lat, lng: viewer.lng, label: viewer.name }
@@ -185,12 +216,15 @@ export default function App() {
       setToast({ kind: 'ok', text: `Taken down: ${d.food_type}` })
     }).catch(() => {})
 
-  const card = ({ donation: d, distance, mode }) => (
+  const card = ({ donation: d, distance, mode, eta, inReach }) => (
     <div key={d.id} id={`card-${d.id}`}>
       <DonationCard
         donation={d}
         mode={mode}
         distance={distance}
+        eta={eta}
+        inReach={inReach}
+        reachKm={reach ? reach.radius / 1000 : null}
         now={now}
         config={config}
         selected={d.id === selectedId}
@@ -205,10 +239,13 @@ export default function App() {
     </div>
   )
 
+  const inPersonReach = open.filter((i) => i.inReach).length
   const summary = (
     <>
       {mine.length ? `${mine.length} pickup${mine.length === 1 ? '' : 's'} · ` : ''}
-      {open.length} listing{open.length === 1 ? '' : 's'} {viewer ? 'near you' : 'live now'}
+      {identity.individual && !viewer
+        ? `${inPersonReach} listing${inPersonReach === 1 ? '' : 's'} within your ${reach.radius / 1000} km`
+        : `${open.length} listing${open.length === 1 ? '' : 's'} ${viewer ? 'in your reach' : 'live now'}`}
       {!viewer && <span className="font-normal text-slate-400"> · approximate areas</span>}
     </>
   )
@@ -221,6 +258,13 @@ export default function App() {
         </>
       )}
 
+      {donor && (
+        <p className="text-xs text-slate-600 bg-teal-50 rounded-lg px-3 py-2">
+          🏠 <strong>{kitchensInReach.length}</strong> partner kitchen{kitchensInReach.length === 1 ? '' : 's'} can
+          reach your spot · 🙋 <strong>{donor.neighbors_nearby ?? 0}</strong> neighbor
+          {donor.neighbors_nearby === 1 ? '' : 's'} on the flash-offer list nearby
+        </p>
+      )}
       {own.length > 0 && (
         <>
           <h2 className="text-sm font-semibold text-teal-700 px-1 pt-1">Food you posted ({own.length})</h2>
@@ -236,14 +280,16 @@ export default function App() {
           {viewer ? 'Nothing within reach right now.' : 'No surplus food listed right now.'}
           <br />
           New listings appear here instantly.
-          {out.length > 0 && (
-            <p className="mt-2 text-xs">
-              {out.length} listing{out.length === 1 ? ' is' : 's are'} nearby but not reaching you yet (grey areas).
-            </p>
-          )}
         </div>
       )}
       {open.map(card)}
+
+      {out.length > 0 && (
+        <>
+          <h2 className="text-sm font-semibold text-slate-500 px-1 pt-2">Not in your reach yet ({out.length})</h2>
+          {out.map(card)}
+        </>
+      )}
     </>
   )
 
@@ -297,6 +343,8 @@ export default function App() {
               recipients={recipients}
               viewer={viewer}
               home={home}
+              reach={reach}
+              kitchensInReach={kitchensInReach}
               selected={selected}
               onSelect={select}
               now={now}

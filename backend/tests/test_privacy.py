@@ -109,6 +109,33 @@ def test_stranger_sees_nothing_exact_and_browser_is_refused(world):
 
 # --- take down from the web --------------------------------------------------------------
 
+
+def test_donor_sees_who_claimed_but_an_individual_only_approximately(world):
+    """A kitchen's spot is public; an individual's (usually their home) is only a ~500 m cell,
+    and the donor sees how many neighbors are nearby, never where they are."""
+    ids, headers, L = world
+    person = repo.get_individual(PERSON_TG, "api_test_bot")
+    repo.claim_donation(str(L["near"]), str(person["id"]))
+    repo.claim_donation(str(L["far"]), ids["cityproper"])
+    v = view(headers(tg_id=DONOR_TG))
+    rows = {r["id"]: r for r in v["my_listings"]}
+
+    by_person = rows[str(L["near"])]
+    assert by_person["claimer_type"] == "individual" and by_person["claimer_name"] == "Neighbor"
+    assert on_grid_center(by_person["claimer_lat"]) and on_grid_center(by_person["claimer_lng"])
+    assert (by_person["claimer_lat"], by_person["claimer_lng"]) != (person["lat"], person["lng"])
+    assert 0 < by_person["claimer_distance_m"] < 500
+
+    by_org = rows[str(L["far"])]
+    assert by_org["claimer_type"] == "partner_org" and (by_org["claimer_lat"], by_org["claimer_lng"]) == (10.6965, 122.5645)
+
+    assert v["donor"]["neighbors_nearby"] >= 1  # PERSON_TG lives ~150 m away
+
+
+def test_individual_view_includes_their_pickup_range(world):
+    _, headers, _ = world
+    assert view(headers(tg_id=PERSON_TG))["individual"]["radius_m"] == 3000
+
 def test_donor_can_take_down_own_unclaimed_listing(world):
     _, headers, L = world
     res = client.post(f"/api/listings/{L['far']}/withdraw", headers=headers(tg_id=DONOR_TG))

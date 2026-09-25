@@ -1,6 +1,6 @@
 import { Fragment, useEffect } from 'react'
 import L from 'leaflet'
-import { Circle, MapContainer, Marker, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap, ZoomControl } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { timeLeft, urgency, URGENCY_COLORS, formatLeft } from '../lib/urgency'
 
@@ -32,12 +32,17 @@ function FlyTo({ target }) {
 const APPROX_AREA_M = 300
 
 /**
- * items: [{ donation, mode }]
+ * items: [{ donation, mode, inReach? }]
  *   exact:       'open' (in the org's reach) · 'mine' (claimed by this viewer) · 'own' (the donor's listing)
- *   approximate: 'public' (no identity) · 'out' (outside the org's reach) — location is a ~500 m cell
+ *   approximate: 'public' (no identity) · 'out' (outside the org's reach) · 'person' (individual's view;
+ *                grey when outside their pickup range) — location is a ~500 m cell
  * home: the viewer's own spot (org / donor / individual), if known
+ * reach: the viewer's own pickup area { lat, lng, radius } (org / individual). Recipients see their
+ *   area instead of every listing's search circle; a listing's circle shows only when it's selected.
+ * kitchensInReach: (donor view) kitchens whose pickup area covers the donor's spot, highlighted
  */
-export default function MapView({ items, recipients, viewer, home, selected, onSelect, now }) {
+export default function MapView({ items, recipients, viewer, home, reach, kitchensInReach = [], selected, onSelect, now }) {
+  const canReach = new Set(kitchensInReach.map((k) => k.id))
   return (
     <MapContainer center={ILOILO} zoom={14} className="h-full w-full" zoomControl={false}>
       <TileLayer
@@ -48,15 +53,34 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
       {/* top-right: the phone listings sheet covers the bottom of the map */}
       <ZoomControl position="topright" />
 
+      {reach && (
+        <Circle
+          center={[reach.lat, reach.lng]}
+          radius={reach.radius}
+          interactive={false}
+          pathOptions={{ color: '#4f46e5', weight: 2, opacity: 0.7, fillColor: '#4f46e5', fillOpacity: 0.05 }}
+        />
+      )}
+
       {recipients.map((r) => (
         <Marker
           key={r.id}
           position={[r.lat, r.lng]}
-          icon={pinIcon({ color: r.id === viewer?.id ? '#4f46e5' : '#64748b', emoji: '🏠', size: 30 })}
+          icon={pinIcon({
+            color: r.id === viewer?.id ? '#4f46e5' : canReach.has(r.id) ? '#059669' : '#64748b',
+            emoji: '🏠',
+            size: 30,
+          })}
           zIndexOffset={-100}
         >
           <Popup>
             <strong>{r.name}</strong>
+            {canReach.has(r.id) && (
+              <>
+                <br />
+                <span style={{ color: '#047857' }}>✅ Can pick up from your spot</span>
+              </>
+            )}
             {r.review_status === 'pending_review' && (
               <>
                 <br />
@@ -75,10 +99,11 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
         </Marker>
       )}
 
-      {items.map(({ donation: d, mode }) => {
+      {items.map(({ donation: d, mode, inReach }) => {
         const { leftMs, fraction } = timeLeft(d, now)
-        const approx = mode === 'public' || mode === 'out'
-        const color = approx && mode === 'out' ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
+        const approx = mode === 'public' || mode === 'out' || mode === 'person'
+        const greyed = mode === 'out' || (mode === 'person' && !inReach)
+        const color = greyed ? '#94a3b8' : URGENCY_COLORS[urgency(fraction)].hex
         const isSelected = selected?.id === d.id
         if (approx) {
           return (
@@ -97,7 +122,13 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
                 {mode === 'out' && (
                   <>
                     <br />
-                    <em>Not in your area yet: its reach doesn't cover you</em>
+                    <em>Not in your reach yet</em>
+                  </>
+                )}
+                {mode === 'person' && !inReach && (
+                  <>
+                    <br />
+                    <em>Outside your pickup range</em>
                   </>
                 )}
               </Popup>
@@ -105,11 +136,34 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
           )
         }
         const mine = mode === 'mine'
-        const pinColor = mine ? '#4f46e5' : mode === 'own' ? '#0f766e' : color
+        const own = mode === 'own'
+        const pinColor = mine ? '#4f46e5' : own ? '#0f766e' : color
+        // Who's coming for the donor's claimed food: a kitchen exactly, a neighbor only as an area
+        const claimer = own && d.status === 'claimed' && d.claimer_lat != null ? d : null
         return (
           <Fragment key={d.id}>
-            {/* Outline-only reach circles so overlapping listings stay readable; fill the selected one */}
-            {!mine && (
+            {claimer &&
+              (claimer.claimer_type === 'individual' ? (
+                <Circle
+                  center={[claimer.claimer_lat, claimer.claimer_lng]}
+                  radius={APPROX_AREA_M}
+                  pathOptions={{ color: '#7c3aed', weight: 1.5, fillColor: '#7c3aed', fillOpacity: 0.15 }}
+                >
+                  <Popup>
+                    🙋 <strong>{claimer.claimer_name}</strong> is picking up {d.food_type}
+                    <br />
+                    Approximate area only
+                  </Popup>
+                </Circle>
+              ) : (
+                <Polyline
+                  positions={[[claimer.claimer_lat, claimer.claimer_lng], [d.lat, d.lng]]}
+                  pathOptions={{ color: '#4f46e5', weight: 2, opacity: 0.6, dashArray: '6 6' }}
+                />
+              ))}
+            {/* Search circles: always for the donor's own food; for recipients only when selected
+                (their own pickup area is drawn instead). Outline-only so overlaps stay readable. */}
+            {(own || (mode === 'open' && isSelected)) && d.status !== 'claimed' && (
               <Circle
                 center={[d.lat, d.lng]}
                 radius={d.search_radius_m}
@@ -135,7 +189,11 @@ export default function MapView({ items, recipients, viewer, home, selected, onS
               <Popup>
                 <strong>{d.food_type}</strong> · {d.quantity}
                 <br />
-                {mine ? 'Claimed by you' : mode === 'own' ? 'Your listing' : `${formatLeft(leftMs)} left`}
+                {mine
+                  ? 'Claimed by you'
+                  : own
+                    ? d.status === 'claimed' ? `Claimed by ${d.claimer_name ?? 'someone'}` : 'Your listing'
+                    : `${formatLeft(leftMs)} left`}
               </Popup>
             </Marker>
           </Fragment>

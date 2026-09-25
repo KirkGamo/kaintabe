@@ -63,17 +63,20 @@ async def role_map(user: dict = Depends(tg_auth.telegram_user)):
         asyncio.to_thread(repo.get_individual, chat_id, bot),
         asyncio.to_thread(repo.get_donor_by_chat, chat_id),
     )
-    in_range, pickups, mine = await asyncio.gather(
+    in_range, pickups, mine, neighbors = await asyncio.gather(
         asyncio.to_thread(repo.listings_in_range, org["id"]) if org else asyncio.sleep(0, []),
         asyncio.to_thread(repo.pending_pickups, [r["id"] for r in (org, person) if r]),
         asyncio.to_thread(repo.donor_listings, donor["id"]) if donor else asyncio.sleep(0, []),
+        asyncio.to_thread(repo.neighbors_near, donor["lat"], donor["lng"], bot) if donor else asyncio.sleep(0, 0),
     )
     return {
         "first_name": user.get("first_name"),
         "org": _public_org(org),
-        "individual": {"lat": person["lat"], "lng": person["lng"], "active": person["active"]} if person else None,
+        "individual": {"lat": person["lat"], "lng": person["lng"], "active": person["active"],
+                       "radius_m": person["service_radius_m"]} if person else None,
+        # neighbors_nearby: a count only; individuals' locations are never sent to donors
         "donor": {"id": donor["id"], "name": donor["name"], "type": donor["type"], "lat": donor["lat"],
-                  "lng": donor["lng"]} if donor else None,
+                  "lng": donor["lng"], "neighbors_nearby": neighbors} if donor else None,
         "in_range": in_range,
         "my_pickups": pickups,
         "my_listings": mine,

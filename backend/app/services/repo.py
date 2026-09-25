@@ -354,11 +354,19 @@ def pending_pickups(recipient_ids: list) -> list[dict]:
 
 
 def donor_listings(donor_id) -> list[dict]:
-    """The donor's own live or claimed listings, exact, with who claimed them."""
+    """The donor's own live or claimed listings, exact, with who claimed them.
+
+    Where the claimer is: a kitchen's exact spot (a public place), but an individual only as the
+    ~500 m cell center (their spot is usually their home) - and only while the pickup is pending,
+    since completed listings aren't returned here.
+    """
     with db.connect() as conn:
         return conn.execute(
             f"""
-            select {LISTING_COLS}, r.name as claimer_name
+            select {LISTING_COLS}, r.name as claimer_name, r.type as claimer_type,
+                   case when r.type = 'individual' then snap_to_grid(r.lat) else r.lat end as claimer_lat,
+                   case when r.type = 'individual' then snap_to_grid(r.lng) else r.lng end as claimer_lng,
+                   st_distance(d.location, r.location) as claimer_distance_m
               from donations d
               left join claims c on c.donation_id = d.id
               left join recipients r on r.id = c.recipient_id
@@ -368,6 +376,20 @@ def donor_listings(donor_id) -> list[dict]:
             """,
             (donor_id,),
         ).fetchall()
+
+
+def neighbors_near(lat: float, lng: float, via_bot: str) -> int:
+    """How many people on this bot's flash-offer list could get food posted at this spot
+    (it's within their own pickup range). A count only: individuals' locations stay private."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select count(*) n from recipients
+             where type = 'individual' and active and via_bot = %s and telegram_chat_id is not null
+               and st_dwithin(location, st_setsrid(st_makepoint(%s, %s), 4326)::geography, service_radius_m)
+            """,
+            (via_bot, lng, lat),
+        ).fetchone()["n"]
 
 
 # --- numbers for the /start welcome ------------------------------------------------------
