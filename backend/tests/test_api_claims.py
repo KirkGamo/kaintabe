@@ -178,3 +178,28 @@ def test_reserving_sale_locks_price_and_tells_donor(send, sale_listing, api_orgs
     assert 48 <= price <= 50  # live price at reserve time, not the stale stored P100
     text = send.await_args.args[1]
     assert "Reserved" in text and f"₱{price:g}" in text and "pay you" in text
+
+
+@patch("app.routes.telegram.edit_message", new_callable=AsyncMock)
+@patch("app.routes.telegram.send_message", new_callable=AsyncMock)
+def test_map_claim_updates_the_claimers_telegram_offer(send, edit, api_orgs):
+    """Claiming on the map turns the chat's flash offer into 'It's yours' (buttons gone)."""
+    from app.services import repo
+    _, headers = api_orgs
+    person = repo.upsert_individual(-219203, "Karlo", 10.7260, 122.5585, "api_test_bot")
+    conn = db.connect()
+    offered = insert_donation(conn, food_type="API offer message", status="escalated", radius_m=8000)
+    conn.execute("insert into flash_offers (donation_id, recipient_id, message_id) values (%s, %s, 4242)",
+                 (offered, person["id"]))
+    conn.commit()
+    try:
+        assert claim(str(offered), headers(tg_id=-219203)).status_code == 201
+        edit.assert_awaited_once()
+        chat_id, message_id, text = edit.await_args.args
+        assert (chat_id, message_id) == (-219203, 4242) and "It's yours" in text
+    finally:
+        conn.execute("delete from claims where donation_id = %s", (offered,))
+        conn.execute("delete from donations where id = %s", (offered,))
+        conn.execute("delete from recipients where id = %s", (person["id"],))
+        conn.commit()
+        conn.close()

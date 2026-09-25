@@ -11,7 +11,6 @@ from app.services.notify import md
 log = logging.getLogger(__name__)
 
 
-
 def offer_text(o: dict) -> str:
     hours_left = max(0, (o["expires_at"] - datetime.now(timezone.utc)).total_seconds() / 3600)
     good_for = f"{hours_left:.0f} hrs" if hours_left >= 1 else f"{hours_left * 60:.0f} min"
@@ -30,7 +29,7 @@ async def send_pending(bot) -> int:
     sent = 0
     for o in offers:
         try:
-            await bot.send_message(
+            msg = await bot.send_message(
                 chat_id=o["chat_id"],
                 text=offer_text(o),
                 parse_mode="Markdown",
@@ -39,6 +38,9 @@ async def send_pending(bot) -> int:
                 ),
             )
             sent += 1
+            # remembered so the offer can be updated once someone claims the food (offer_messages)
+            await asyncio.to_thread(repo.remember_offer_message, "flash", o["donation_id"], o["recipient_id"],
+                                    msg.message_id)
         except Exception as e:  # noqa: BLE001 - one blocked/unreachable person mustn't stop the rest
             log.warning("flash offer to %s failed: %s", o["chat_id"], type(e).__name__)
     if offers:

@@ -10,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from pydantic import BaseModel
 
 from app import tg_auth
-from app.services import notify, repo, storage, telegram
+from app.services import notify, offer_messages, repo, storage, telegram
 
 router = APIRouter(prefix="/api")
 
@@ -110,6 +110,8 @@ async def create_claim(body: ClaimRequest, background: BackgroundTasks, user: di
         raise HTTPException(409, "This listing was just claimed by someone else or is no longer available.")
 
     background.add_task(telegram.send_message, claim["donor_chat_id"], notify.claimed_text(claim))
+    # the Telegram offers/alerts for this food: "✅ It's yours" for the claimer, "taken" for the rest
+    background.add_task(offer_messages.close, donation_id, claim, telegram.edit_message)
     return {
         "id": claim["id"],
         "donation_id": claim["donation_id"],

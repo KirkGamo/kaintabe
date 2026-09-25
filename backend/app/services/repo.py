@@ -378,6 +378,47 @@ def donor_listings(donor_id) -> list[dict]:
         ).fetchall()
 
 
+_OFFER_TABLES = {"flash": "flash_offers", "alert": "org_alerts"}
+
+
+def remember_offer_message(kind: str, donation_id, recipient_id, message_id: int) -> None:
+    """Store the Telegram message that carried a flash offer ('flash') or org alert ('alert')."""
+    with db.connect() as conn:
+        conn.execute(
+            f"update {_OFFER_TABLES[kind]} set message_id = %s where donation_id = %s and recipient_id = %s",
+            (message_id, donation_id, recipient_id),
+        )
+
+
+def offer_messages(donation_id) -> list[dict]:
+    """Every flash-offer / org-alert message sent for this listing, and to whom."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select o.recipient_id, r.telegram_chat_id as chat_id, o.message_id
+              from (select recipient_id, message_id from flash_offers where donation_id = %(d)s
+                    union all
+                    select recipient_id, message_id from org_alerts where donation_id = %(d)s) o
+              join recipients r on r.id = o.recipient_id
+             where o.message_id is not null and r.telegram_chat_id is not null
+            """,
+            {"d": donation_id},
+        ).fetchall()
+
+
+def claim_of(donation_id) -> dict | None:
+    """The current claim on a listing with what an 'it's yours' message needs, if it's claimed."""
+    with db.connect() as conn:
+        return conn.execute(
+            """
+            select c.recipient_id, c.reserved_price, d.food_type, d.quantity, d.lat, d.lng
+              from claims c join donations d on d.id = c.donation_id
+             where c.donation_id = %s and c.confirmed_at is null and d.status = 'claimed'
+            """,
+            (donation_id,),
+        ).fetchone()
+
+
 def open_flash_offers(recipient_id) -> list[dict]:
     """Flash offers this individual got that are still up for grabs, with what the Telegram offer
     already told them (food, donor, distance). The exact spot comes only after they claim."""

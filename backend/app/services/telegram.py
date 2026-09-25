@@ -36,6 +36,26 @@ async def send_message(chat_id: int | None, text: str, with_map: bool = True) ->
         return False
 
 
+async def edit_message(chat_id: int, message_id: int, text: str) -> bool:
+    """Replace a message's text and drop its buttons (e.g. an offer someone has claimed). Best effort."""
+    if not settings.telegram_bot_token:
+        return False
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown",
+               "disable_web_page_preview": True}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"https://api.telegram.org/bot{settings.telegram_bot_token}/editMessageText", json=payload
+            )
+        if res.status_code != 200:
+            log.info("telegram editMessageText failed: %s %s", res.status_code, res.text[:200])
+            return False
+        return True
+    except httpx.HTTPError as e:
+        log.info("telegram editMessageText error: %s", type(e).__name__)
+        return False
+
+
 async def send_photo(chat_id: int | None, photo: bytes, caption: str) -> bool:
     """Upload the photo bytes directly (Telegram fetching our storage URL is unreliable).
 
